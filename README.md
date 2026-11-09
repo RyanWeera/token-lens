@@ -70,6 +70,12 @@ The mod does not hook tool calls or tool results, and does not change the system
 
 Costs are estimates at first-party list prices, listed in `PRICES` in `hooks/scan.mjs` with the date they were checked (`PRICES_AS_OF`, printed in every report). A row names a model id (for example `opus-5-5`, `fable-5-1`, `haiku-5-5`) with its input, output and cache-read rate. Cache writes are priced from the input rate: 1.25 times for the 5 minute tier and 2 times for the 1 hour tier, using the split in the transcript (`cache_creation.ephemeral_1h_input_tokens`). A turn with no split counts as 5 minute. Haiku 5.5 has a higher rate above 100K prompt tokens. A model with no exact row uses its family row or the Sonnet rate, and the report lists it as estimated. Edit the table when prices change.
 
+## Credits
+
+- The feature ideas (usage report, checkpoints around compaction, setup audit) come from [Token Optimizer](https://github.com/alexgreensh/token-optimizer) by Alex Greenshpun (alexgreensh), released under PolyForm Noncommercial 1.0.0. token-lens is a separate rewrite. No code from Token Optimizer was copied or used.
+- It is built on the mod (hooks) API of Claude Code by Anthropic.
+- The price table follows Anthropic's published API list prices.
+
 ## Tests
 
 ```
