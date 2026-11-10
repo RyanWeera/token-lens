@@ -73,8 +73,6 @@ Costs are estimates at first-party list prices, listed in `PRICES` in `hooks/sca
 ## Credits
 
 - The feature ideas (usage report, checkpoints around compaction, setup audit) come from [Token Optimizer](https://github.com/alexgreensh/token-optimizer) by Alex Greenshpun (alexgreensh), released under PolyForm Noncommercial 1.0.0. token-lens is a separate rewrite. No code from Token Optimizer was copied or used.
-- It is built on the mod (hooks) API of Claude Code by Anthropic.
-- The price table follows Anthropic's published API list prices.
 
 ## Tests
 
