@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { buildCheckpoint, doomed, redact, RETAIN_MS } from '../hooks/checkpoint'
+import { buildCheckpoint, doomed, projKey, redact, RETAIN_MS } from '../hooks/checkpoint'
 
 test('redact removes keys, tokens, passwords and url credentials', () => {
   // Built from parts so no key-shaped literal sits in the repository.
@@ -106,4 +106,34 @@ test('/tokens auto off stops the automatic run and the plan shows what would cha
   expect(String(off.text)).toContain('off')
   const p = (await $.command.run({ command: 'tokens', args: 'plan' } as never)) as { text?: string }
   expect(String(p.text)).toContain('old@m')
+})
+
+test('redaction stays fast on a huge crafted text, and catches a long-named key', () => {
+  const t0 = Date.now()
+  const cp = buildCheckpoint([{ role: 'user', text: 'key'.repeat(300_000), toolUses: [] }] as never, 1, 'sid', '/p')
+  expect(Date.now() - t0).toBeLessThan(1000)
+  expect(cp.task.length).toBeLessThan(310)
+  expect(redact('very_long_name_for_the_api_key = abcdef123456')).not.toContain('abcdef123456')
+})
+
+test('two project roots that differ only in punctuation keep separate checkpoints', () => {
+  expect(projKey('/a/b')).not.toBe(projKey('/a-b'))
+})
+
+test('/tokens undo needs no scan, uses the logged file, backs it up, and skips plugins already on', async ($, on) => {
+  mock.store(on, { changes: [{ at: 1, id: 'old@m', file: '/s.json' }, { at: 1, id: 'already@m', file: '/s.json' }] })
+  mock.clock(on, { now: 9_000_000_000 })
+  let file = JSON.stringify({ enabledPlugins: { 'old@m': false, 'already@m': true } })
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('command.register', () => ({ value: { command: 'tokens' } }))
+  on('process.run', () => { throw new Error('undo must not run a scan') })
+  on('fs.read', () => ({ value: file }))
+  on('fs.write', (_, e) => { file = (e as unknown as { text: string }).text; return { value: undefined } })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as never)
+  const r = (await $.command.run({ command: 'tokens', args: 'undo' } as never)) as { text?: string }
+  expect(String(r.text)).toContain('old@m')
+  expect(String(r.text)).not.toContain('already@m')
+  expect(JSON.parse(file).enabledPlugins['old@m']).toBe(true)
+  const again = (await $.command.run({ command: 'tokens', args: 'undo' } as never)) as { text?: string }
+  expect(String(again.text)).toContain('Nothing to undo')
 })

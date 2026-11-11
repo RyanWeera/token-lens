@@ -18,7 +18,7 @@ const SECRETS: [RegExp, string][] = [
   [/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, '[redacted jwt]'],
   [/\bBearer\s+[A-Za-z0-9._~+/=-]{16,}/gi, 'Bearer [redacted]'],
   [/(https?:\/\/)[^\s/:@]+:[^\s/@]+@/g, '$1[redacted]@'],
-  [/\b([A-Za-z0-9_]*(?:key|token|secret|password|passwd|pwd)[A-Za-z0-9_]*)\s*[:=]\s*["']?[^\s"',;]{6,}/gi, '$1=[redacted]'],
+  [/([A-Za-z0-9_]{0,40}(?:key|token|secret|password|passwd|pwd)[A-Za-z0-9_]{0,40})\s*[:=]\s*["']?[^\s"',;]{6,}/gi, '$1=[redacted]'],
   [/\b[a-f0-9]{40,}\b/gi, '[redacted hex]'],
 ]
 
@@ -27,7 +27,8 @@ export function redact(s: string): string {
 }
 
 const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n) + '...' : s)
-const clean = (s: string, n: number) => clip(redact(s.replace(/\s+/g, ' ').trim()), n)
+// Cut first, so a huge pasted text never goes through the patterns at full size.
+const clean = (s: string, n: number) => clip(redact(s.slice(0, n * 4).replace(/\s+/g, ' ').trim()), n)
 
 /** What the session was doing: last prompts, files edited, lines that read like decisions. */
 export function buildCheckpoint(msgs: readonly Msg[], at: number, sid: string, project: string): Checkpoint {
@@ -42,7 +43,9 @@ export function formatCheckpoint(c: Checkpoint): string {
   return `[token-lens checkpoint, saved ${new Date(c.at).toISOString()}, session ${c.sid.slice(0, 8)}]\nActive task: ${c.task || '(none found)'}\n${list('Recent prompts:', c.prompts)}${list('Files modified:', c.files)}${list('Decisions:', c.decisions)}`
 }
 
-export const projKey = (root: string) => root.replace(/[^A-Za-z0-9]+/g, '-')
+// The hash keeps `a/b` and `a-b` apart.
+const hash = (s: string) => [...s].reduce((h, c) => (Math.imul(h, 31) + c.charCodeAt(0)) >>> 0, 7).toString(36)
+export const projKey = (root: string) => `${root.replace(/[^A-Za-z0-9]+/g, '-')}-${hash(root)}`
 export const cpKey = (root: string, at: number) => `cp:${projKey(root)}:${at}`
 const stamp = (k: string) => Number(k.slice(k.lastIndexOf(':') + 1))
 

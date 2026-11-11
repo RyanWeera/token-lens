@@ -12,13 +12,16 @@ All commands are `/tokens <option>`.
 | `/tokens audit` | Finds context waste: CLAUDE.md size, skill and agent descriptions, MCP servers, duplicates. Read only. |
 | `/tokens plan` | Shows which plugins automatic tuning would turn off, and why. Changes nothing. |
 | `/tokens auto [on\|off\|run\|status]` | Automatic tuning. On by default. `run` analyses and applies now. |
-| `/tokens undo` | Turns back on every plugin token-lens turned off. |
+| `/tokens undo` | Turns back on every plugin token-lens turned off, with the same backup and check as the change itself. |
+| `/tokens help` | Lists the commands and the automatic actions. |
 | `/tokens checkpoint` | Saves a summary of this session now. |
 | `/tokens checkpoints` | Lists this project's checkpoints. |
 | `/tokens restore` | Shows the newest checkpoint for this project and adds it to the conversation. |
 | `/tokens purge` | Deletes everything token-lens stored. |
 
-## What it does by itself (default on, `/tokens auto off` stops all of it)
+## What it does by itself (default on)
+
+`/tokens auto off` stops the summarizer instructions, the added-back checkpoint row, the daily analysis and the weekly plugin changes. A checkpoint is still saved before each compaction (local, redacted, kept 14 days); `/tokens purge` removes them.
 
 Every action is shown on screen (a log line, and a toast where noted) when it happens.
 
@@ -45,8 +48,8 @@ The mod does not hook tool calls or tool results, and does not change the system
 
 **Data stored**, in the engine's per-plugin store (`~/.claude/plugins/store/token-lens_*.json`):
 - Checkpoints: project path, session id, time, the last three prompts, files edited, up to five decision-like lines. Text is cut to 300 characters and secrets are redacted (private keys, `sk-` and `ghp_` style keys, AWS keys, JWTs, bearer tokens, `key=`/`token=`/`password=` values, URL credentials, long hex strings). Kept 14 days and the newest 10 per project.
-- Settings backups: the last 3 copies of `settings.json` taken before a change.
-- Change log: the last 50 plugin ids turned off (this is what `/tokens undo` reads).
+- Settings backups: the last 3 copies of `settings.json`, taken before each change or undo. They are a safety copy for manual recovery from the store file; no command restores a whole backup.
+- Change log: the last 50 plugin ids turned off, each with the settings file it was in (this is what `/tokens undo` reads).
 - Automatic tuning state: on or off, time of the last analysis and change.
 
 **Uninstall:** run `/tokens undo` if you want the plugins back, then `/tokens purge`, uninstall the mod, and delete `~/.claude/plugins/store/token-lens_*.json` if it is still there. The mod cannot delete files itself. Note that `purge` also deletes the undo log.
@@ -55,7 +58,7 @@ The mod does not hook tool calls or tool results, and does not change the system
 
 ## Code that runs
 
-`/tokens`, `/tokens audit`, `/tokens plan` and the daily analysis run `node hooks/scan.mjs` from this mod's own folder (`$.plugin.root`), once, then it exits. `scan.mjs` only reads. Nothing is run from any other folder, nothing is downloaded, and `npx` is never used. The mod uses the Node and TypeScript standard library only and has no dependencies.
+`/tokens`, `/tokens audit`, `/tokens plan` and the daily analysis run `node hooks/scan.mjs` from this mod's own folder (`$.plugin.root`), once, then it exits. It runs with this mod's folder as its working directory. `scan.mjs` only reads, and strips control characters from the names it prints. Nothing is run from any other folder, nothing is downloaded, and `npx` is never used. The mod uses the Node and TypeScript standard library only and has no dependencies.
 
 ## Security rules this mod keeps
 

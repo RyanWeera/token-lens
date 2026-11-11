@@ -6,6 +6,9 @@ import { basename, dirname, join, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 
+// Names come from files a repository controls: no control or escape characters reach the terminal.
+const strip = t => t.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, '')
+
 export const claudeDir = () => process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude')
 
 // USD per million tokens, first-party API list prices. Edit here when prices change.
@@ -137,7 +140,14 @@ function claudeMdChain(cwd, dir) {
   return [...new Set(files)].filter(existsSync).map(f => {
     const text = readFileSync(f, 'utf8')
     // one level of @imports
-    const imp = [...text.matchAll(/^@(\S+)/gm)].map(m => resolve(dirname(f), m[1])).filter(existsSync).reduce((s, p) => s + readFileSync(p, 'utf8').length, 0)
+    // Imports: regular files under 1 MB only, never a network path, never an error.
+    const imp = [...text.matchAll(/^@(\S+)/gm)].map(m => m[1]).filter(r => !/^[\\/]{2}/.test(r)).reduce((s, r) => {
+      try {
+        const p = resolve(dirname(f), r)
+        const st = statSync(p)
+        return st.isFile() && st.size < 1e6 ? s + readFileSync(p, 'utf8').length : s
+      } catch { return s }
+    }, 0)
     return { file: f, chars: text.length + imp }
   })
 }
@@ -145,7 +155,7 @@ function claudeMdChain(cwd, dir) {
 function installedPlugins(dir) {
   try {
     const j = JSON.parse(readFileSync(join(dir, 'plugins', 'installed_plugins.json'), 'utf8'))
-    return Object.entries(j.plugins || {}).flatMap(([id, v]) => (Array.isArray(v) ? v : [v]).map(x => ({ id, path: x.installPath, at: Date.parse(x.installedAt || x.lastUpdated) || 0 })).filter(x => x.path))
+    return Object.entries(j.plugins || {}).flatMap(([id, v]) => (Array.isArray(v) ? v : [v]).slice(0, 1).map(x => ({ id, path: x.installPath, at: Date.parse(x.installedAt || x.lastUpdated) || 0 })).filter(x => x.path))
   } catch { return [] }
 }
 
@@ -155,10 +165,10 @@ const safeHost = u => { try { return new URL(u).host } catch { return 'url' } }
 function mcpServers(cwd, dir, plugins) {
   const out = []
   const take = (src, obj) => Object.entries(obj || {}).forEach(([name, c]) => out.push({ src, name, sig: c.url ? safeHost(c.url) : basename(String(c.command || '')) + ' ' + (c.args || []).filter(a => !/^-/.test(a)).slice(0, 1).join(' ') }))
-  try { const j = JSON.parse(readFileSync(join(homedir(), '.claude.json'), 'utf8')); take('user', j.mcpServers); take('project', j.projects?.[cwd]?.mcpServers) } catch { /* none */ }
+  try { const j = JSON.parse(readFileSync(join(homedir(), '.claude.json'), 'utf8')); take('user', j.mcpServers); take('project', (j.projects?.[cwd] ?? j.projects?.[cwd.replace(/\\/g, '/')])?.mcpServers) } catch { /* none */ }
   try { take('.mcp.json', JSON.parse(readFileSync(join(cwd, '.mcp.json'), 'utf8')).mcpServers) } catch { /* none */ }
   for (const p of plugins) {
-    for (const f of ['.mcp.json']) try { const j = JSON.parse(readFileSync(join(p.path, f), 'utf8')); take(p.id, j.mcpServers || j) } catch { /* none */ }
+    try { const j = JSON.parse(readFileSync(join(p.path, '.mcp.json'), 'utf8')); take(p.id, j.mcpServers || j) } catch { /* none */ }
   }
   return out
 }
@@ -218,7 +228,7 @@ async function signals(days, now, dir) {
       if (file.slice(pdir.length + 1).split(/[\\/]/).length === 1) sessions++
       const rl = createInterface({ input: createReadStream(file, 'utf8'), crlfDelay: Infinity })
       for await (const line of rl) {
-        if (line.includes('compact_boundary')) compactions++
+        if (line.includes('compact_boundary') && !(Date.parse(line.match(/"timestamp":"([^"]+)"/)?.[1]) < since)) compactions++
         for (const m of line.matchAll(/<command-name>\/?([^<]+)<\/command-name>/g)) sig.add('cmd:' + m[1].trim().toLowerCase())
         if (!line.includes('"tool_use"')) continue
         let o
@@ -247,7 +257,7 @@ export function unusedPlugins(dir, enabled, sig, now, minAgeDays = 30) {
   for (const p of installedPlugins(dir)) {
     const plugin = p.id.split('@')[0].toLowerCase()
     if (enabled[p.id] !== true || plugin === 'token-lens') continue
-    if ((now - (p.at || statSync(p.path).birthtimeMs)) / 864e5 < minAgeDays) continue
+    if (!existsSync(p.path) || (now - (p.at || statSync(p.path).birthtimeMs)) / 864e5 < minAgeDays) continue
     let manifest = {}
     try { manifest = JSON.parse(readFileSync(join(p.path, '.claude-plugin', 'plugin.json'), 'utf8')) } catch { /* none */ }
     if (NOT_PURE.some(k => k in manifest) || existsSync(join(p.path, 'hooks'))) continue
@@ -284,5 +294,5 @@ export async function plan(days = 30, now = Date.now(), dir = claudeDir()) {
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const [mode, arg] = process.argv.slice(2)
   const out = mode === 'plan' ? JSON.stringify(await plan(Number(arg) || 30)) : mode === 'usage' ? await usage(Number(arg) || 30) : mode === 'audit' ? audit(arg || process.cwd()) : 'usage: scan.mjs usage <days> | audit <cwd> | plan <days>'
-  process.stdout.write(out + '\n')
+  process.stdout.write(strip(out) + '\n')
 }

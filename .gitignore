@@ -1,2 +1,12 @@
 graft/
 node_modules/
+.ignore
+.claude/
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.log
+Thumbs.db
+.DS_Store

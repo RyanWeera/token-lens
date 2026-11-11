@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 
-import { audit, cost, price, unusedPlugins, usage } from '../hooks/scan.mjs'
+import { audit, cost, plan, price, unusedPlugins, usage } from '../hooks/scan.mjs'
 
 const M = 1e6
 const near = (a, b) => assert.ok(Math.abs(a - b) < 1e-9, `${a} != ${b}`)
@@ -83,4 +83,27 @@ test('unusedPlugins lists only old, enabled, pure plugins with no trace of use',
   const enabled = { 'idle@m': true, 'used@m': true, 'hooky@m': true, 'young@m': true, 'off@m': false }
   const got = unusedPlugins(dir, enabled, new Set(['skill:used:used-skill']), Date.now()).map(p => p.id)
   assert.deepEqual(got, ['idle@m'])
+})
+
+test('a stale plugin entry, a network @import and a control character do not break the scan', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'tl-'))
+  mkdirSync(join(dir, 'plugins'), { recursive: true })
+  writeFileSync(join(dir, 'plugins', 'installed_plugins.json'), JSON.stringify({ plugins: { 'gone@m': [{ installPath: join(dir, 'missing') }] } }))
+  assert.deepEqual(unusedPlugins(dir, { 'gone@m': true }, new Set(), Date.now()), [])
+  const cwd = mkdtempSync(join(tmpdir(), 'tl-cwd-'))
+  writeFileSync(join(cwd, 'CLAUDE.md'), '@//attacker.example/share/x\n@.\n')
+  writeFileSync(join(cwd, '.mcp.json'), JSON.stringify({ mcpServers: { ['evil\u001b[2Jname']: { url: 'https://h.example/x' } } }))
+  const out = audit(cwd, dir)
+  assert.match(out, /Setup audit/)
+})
+
+test('compactions outside the window are not counted', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'tl-'))
+  const p = join(dir, 'projects', 'p')
+  mkdirSync(p, { recursive: true })
+  const now = Date.now()
+  const line = t => JSON.stringify({ type: 'system', subtype: 'compact_boundary', timestamp: new Date(t).toISOString() })
+  writeFileSync(join(p, 's.jsonl'), [line(now), line(now - 90 * 864e5)].join('\n'))
+  const r = await plan(30, now, dir)
+  assert.equal(r.compactions, 1)
 })
