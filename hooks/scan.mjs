@@ -1,13 +1,15 @@
 // Read-only scanner for token-lens. Node standard library only. No network, no writes.
 // Usage: node scan.mjs usage <days> | audit <cwd> | plan <days>
-import { createReadStream, existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { createReadStream, existsSync, lstatSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 
 // Names come from files a repository controls: no control or escape characters reach the terminal.
-const strip = t => t.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, '')
+const strip = t => t.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g, '')
+// A regular file under 1 MB, read as text; null for anything else (a symlink, a directory, a device, a big file).
+const readSmall = f => { const st = lstatSync(f); return st.isFile() && st.size < 1e6 ? readFileSync(f, 'utf8') : null }
 
 export const claudeDir = () => process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude')
 
@@ -112,7 +114,7 @@ export async function usage(days, now = Date.now(), dir = claudeDir()) {
     '', head('BY MODEL'), ...top(models, 10).map(([m, a]) => row(m, a)),
     '', head('TOP SESSIONS'), ...top(sessions, 10).map(([id, s]) => row(`${id.slice(0, 8)} ${new Date(s.last).toISOString().slice(0, 10)} ${s.label.split(/[\\/]/).pop()}`, s)),
     ...(estimated.size ? ['', `Estimated (no exact price row, family or Sonnet rate used): ${[...estimated].join(', ')}. Edit PRICES in hooks/scan.mjs.`] : []),
-  ].join('\n')
+  ].map(strip).join('\n')
 }
 
 // ---- audit ----
@@ -137,25 +139,29 @@ function claudeMdChain(cwd, dir) {
     files.push(join(d, 'CLAUDE.md'), join(d, '.claude', 'CLAUDE.md'))
     if (dirname(d) === d) break
   }
-  return [...new Set(files)].filter(existsSync).map(f => {
-    const text = readFileSync(f, 'utf8')
-    // one level of @imports
-    // Imports: regular files under 1 MB only, never a network path, never an error.
-    const imp = [...text.matchAll(/^@(\S+)/gm)].map(m => m[1]).filter(r => !/^[\\/]{2}/.test(r)).reduce((s, r) => {
-      try {
-        const p = resolve(dirname(f), r)
-        const st = statSync(p)
-        return st.isFile() && st.size < 1e6 ? s + readFileSync(p, 'utf8').length : s
-      } catch { return s }
-    }, 0)
-    return { file: f, chars: text.length + imp }
+  const seen = new Set()
+  return [...new Set(files)].flatMap(f => {
+    let text
+    try { text = readSmall(f) } catch { return [] }
+    if (text === null) return []
+    // One level of @imports: regular files under 1 MB, each counted once, 100 at most, never a network path.
+    let imp = 0
+    for (const m of text.matchAll(/^@(\S+)/gm)) {
+      if (seen.size >= 100 || /^[\\/]{2}/.test(m[1])) continue
+      const p = resolve(dirname(f), m[1])
+      if (seen.has(p)) continue
+      seen.add(p)
+      try { imp += readSmall(p)?.length ?? 0 } catch { /* none */ }
+    }
+    return [{ file: f, chars: text.length + imp }]
   })
 }
 
 function installedPlugins(dir) {
   try {
     const j = JSON.parse(readFileSync(join(dir, 'plugins', 'installed_plugins.json'), 'utf8'))
-    return Object.entries(j.plugins || {}).flatMap(([id, v]) => (Array.isArray(v) ? v : [v]).slice(0, 1).map(x => ({ id, path: x.installPath, at: Date.parse(x.installedAt || x.lastUpdated) || 0 })).filter(x => x.path))
+    // Ids look like name@market; anything else (control characters included) is ignored.
+    return Object.entries(j.plugins || {}).filter(([id]) => /^[\w.@-]+$/.test(id)).flatMap(([id, v]) => (Array.isArray(v) ? v : [v]).slice(0, 1).map(x => ({ id, path: x?.installPath, at: Date.parse(x?.installedAt || x?.lastUpdated) || 0 })).filter(x => typeof x.path === 'string' && x.path))
   } catch { return [] }
 }
 
@@ -165,7 +171,7 @@ const safeHost = u => { try { return new URL(u).host } catch { return 'url' } }
 function mcpServers(cwd, dir, plugins) {
   const out = []
   const take = (src, obj) => Object.entries(obj || {}).forEach(([name, c]) => out.push({ src, name, sig: c.url ? safeHost(c.url) : basename(String(c.command || '')) + ' ' + (c.args || []).filter(a => !/^-/.test(a)).slice(0, 1).join(' ') }))
-  try { const j = JSON.parse(readFileSync(join(homedir(), '.claude.json'), 'utf8')); take('user', j.mcpServers); take('project', (j.projects?.[cwd] ?? j.projects?.[cwd.replace(/\\/g, '/')])?.mcpServers) } catch { /* none */ }
+  try { const j = JSON.parse(readFileSync(process.env.CLAUDE_CONFIG_DIR ? join(dir, '.claude.json') : join(homedir(), '.claude.json'), 'utf8')); take('user', j.mcpServers); take('project', (j.projects?.[cwd] ?? j.projects?.[cwd.replace(/\\/g, '/')])?.mcpServers) } catch { /* none */ }
   try { take('.mcp.json', JSON.parse(readFileSync(join(cwd, '.mcp.json'), 'utf8')).mcpServers) } catch { /* none */ }
   for (const p of plugins) {
     try { const j = JSON.parse(readFileSync(join(p.path, '.mcp.json'), 'utf8')); take(p.id, j.mcpServers || j) } catch { /* none */ }
@@ -209,7 +215,7 @@ export function audit(cwd, dir = claudeDir()) {
     '',
     'Suggestions (each is a change for you to approve and make):',
     ...tips.map(t => `- ${t}`),
-  ].join('\n')
+  ].map(strip).join('\n')
 }
 
 // ---- plan: what to turn off, learned from how the person really uses Claude ----

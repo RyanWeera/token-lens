@@ -1,1 +1,1 @@
-{ "name": "token-lens", "version": "0.2.0", "description": "Local token usage report, checkpoints across compaction, and a setup audit. No network, no daemons, automatic tuning you can turn off and undo." }
+{ "name": "token-lens", "version": "0.2.1", "description": "Local token usage report, checkpoints across compaction, and a setup audit. No network, no daemons, automatic tuning you can turn off and undo." }

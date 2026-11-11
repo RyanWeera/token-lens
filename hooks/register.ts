@@ -22,14 +22,14 @@ Automatic actions, each shown on screen when it happens:
 - once a day at session start: reads your transcripts; once a week it may turn off enabled plugins you have not used in 30 days (skills, commands, agents or MCP only; never plugins with hooks) in settings.json, after a backup. /tokens undo reverses it.`
 
 type Auto = { off?: boolean; lastRun?: number; lastApply?: number }
-type Change = { at: number; id: string; file: string }
+type Change = { at: number; id: string; file?: string } // `file` is missing in entries logged by 0.2.0
 type Plan = { days: number; sessions: number; compactions: number; settingsPath: string; candidates: { id: string; tokens: number; skills: number; agents: number; servers: number }[] }
 
 // Runs the mod's own scan.mjs, never anything found elsewhere. Read only. The working directory is the mod's own
 // folder, so a program lookup never starts in the project the session opened.
 async function scan($: EngineInterface, args: string[]): Promise<string> {
   const r = await $.process.run(['node', `${$.plugin.root}/hooks/scan.mjs`, ...args], { timeoutMs: 120_000, cwd: $.plugin.root })
-  return r.exitCode === 0 ? r.stdout : `token-lens: scan failed (exit ${r.exitCode}): ${r.stderr.slice(0, 500)}`
+  return r.exitCode === 0 ? r.stdout : `token-lens: scan failed (exit ${r.exitCode}): ${r.stderr.slice(0, 500).replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, '')}`
 }
 
 async function getPlan($: EngineInterface): Promise<Plan | string> {
@@ -53,7 +53,8 @@ async function setPlugins($: EngineInterface, path: string, ids: string[], value
   const hit = [...new Set(ids)].filter(id => settings.enabledPlugins?.[id] === !value).slice(0, limit)
   if (!hit.length) return []
   const slot = Number(((await $.store.get('backup-next')) as number | undefined) ?? 0) % 3
-  await $.store.set(`backup:${slot}`, { at: now, file: path, text: raw })
+  // Only the flags are kept: the rest of settings.json can hold secrets and does not belong in the store.
+  await $.store.set(`backup:${slot}`, { at: now, file: path, enabledPlugins: settings.enabledPlugins })
   await $.store.set('backup-next', slot + 1)
   for (const id of hit) settings.enabledPlugins![id] = value
   await $.fs.write(path, JSON.stringify(settings, null, 2) + '\n')
@@ -61,14 +62,14 @@ async function setPlugins($: EngineInterface, path: string, ids: string[], value
     JSON.parse(await $.fs.read(path))
   } catch {
     await $.fs.write(path, raw)
-    return []
+    throw new Error('settings.json did not parse after the change; the original was put back')
   }
   return hit
 }
 
 // Turns off the plan's unused plugins and logs them, with the file, for /tokens undo.
 async function applyPlan($: EngineInterface, plan: Plan, now: number): Promise<string[]> {
-  const hit = await setPlugins($, plan.settingsPath, plan.candidates.map(c => c.id), false, now, MAX_PER_RUN)
+  const hit = await setPlugins($, plan.settingsPath, plan.candidates.map(c => c.id), false, now, MAX_PER_RUN).catch(() => [] as string[])
   if (!hit.length) return []
   const log = ((await $.store.get('changes')) as Change[] | undefined) ?? []
   await $.store.set('changes', [...log, ...hit.map(id => ({ at: now, id, file: plan.settingsPath }))].slice(-50))
@@ -167,19 +168,24 @@ export const register: Register = on => {
       const log = ((await $.store.get('changes')) as Change[] | undefined) ?? []
       if (!log.length) return { text: 'Nothing to undo.' }
       const now = await $.clock.now()
+      // 0.2.0 logged no file; its newest settings backup names the file it changed.
+      const backups = (await Promise.all([0, 1, 2].map(i => $.store.get(`backup:${i}`)))) as ({ at: number; file: string } | undefined)[]
+      const legacy = backups.filter(Boolean).sort((a, b) => b!.at - a!.at)[0]?.file
+      const fileOf = (c: Change) => c.file ?? legacy ?? ''
       const back: string[] = []
-      const failed: string[] = []
-      for (const file of new Set(log.map(c => c.file))) {
+      const failed = new Map<string, string>()
+      for (const file of new Set(log.map(fileOf))) {
         try {
-          back.push(...(await setPlugins($, file, log.filter(c => c.file === file).map(c => c.id), true, now)))
+          if (!file) throw new Error('the settings file is unknown')
+          back.push(...(await setPlugins($, file, log.filter(c => fileOf(c) === file).map(c => c.id), true, now)))
         } catch (err) {
-          failed.push(`${file}: ${String(err).slice(0, 120)}`)
+          failed.set(file, String(err).slice(0, 120))
         }
       }
-      // Entries that could not be read stay in the log, so a later /tokens undo can try again.
-      await $.store.set('changes', log.filter(c => failed.some(f => f.startsWith(`${c.file}:`))))
-      return { text: `${back.length ? `Turned back on: ${back.join(', ')}. /reload-plugins to apply.` : 'No logged plugin was still turned off.'}${failed.length ? `
-Could not update: ${failed.join('; ')}` : ''}` }
+      // Entries whose file could not be updated stay in the log, so a later /tokens undo can try again.
+      await $.store.set('changes', log.filter(c => failed.has(fileOf(c))))
+      const bad = [...failed].map(([f, why]) => `${f || '(unknown file)'}: ${why}`)
+      return { text: `${back.length ? `Turned back on: ${back.join(', ')}. /reload-plugins to apply.` : failed.size ? '' : 'No logged plugin was still turned off.'}${bad.length ? `\nCould not update: ${bad.join('; ')}` : ''}`.trim() }
     }
     if (cmd === 'checkpoint') {
       const cp = await save($, (await $.session.messages()) as readonly Msg[])

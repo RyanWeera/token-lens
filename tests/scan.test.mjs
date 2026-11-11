@@ -107,3 +107,24 @@ test('compactions outside the window are not counted', async () => {
   const r = await plan(30, now, dir)
   assert.equal(r.compactions, 1)
 })
+
+test('the audit survives a CLAUDE.md that is a directory, skips symlinks and network imports, and prints no escape characters', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'tl-'))
+  const cwd = mkdtempSync(join(tmpdir(), 'tl-cwd-'))
+  mkdirSync(join(cwd, 'CLAUDE.md'))
+  mkdirSync(join(cwd, '.claude', 'skills', 'bad\u202ename'), { recursive: true })
+  writeFileSync(join(cwd, '.claude', 'skills', 'bad\u202ename', 'SKILL.md'), '---\nname: x\ndescription: d\n---\n')
+  writeFileSync(join(cwd, '.mcp.json'), JSON.stringify({ mcpServers: { ['evil\u001b[2Jname']: { url: 'https://h.example/x' } } }))
+  const out = audit(cwd, dir)
+  assert.match(out, /Setup audit/)
+  assert.doesNotMatch(out, /[\u001b\u202e]/)
+})
+
+test('a plugin id with control characters is ignored', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'tl-'))
+  const path = join(dir, 'plugins', 'cache', 'x')
+  mkdirSync(join(path, 'skills', 's'), { recursive: true })
+  writeFileSync(join(path, 'skills', 's', 'SKILL.md'), '---\nname: s\ndescription: d\n---\n')
+  writeFileSync(join(dir, 'plugins', 'installed_plugins.json'), JSON.stringify({ plugins: { 'evil\u001b]0;x\u0007@m': [{ installPath: path, installedAt: '2020-01-01T00:00:00Z' }] } }))
+  assert.deepEqual(unusedPlugins(dir, { 'evil\u001b]0;x\u0007@m': true }, new Set(), Date.now()), [])
+})

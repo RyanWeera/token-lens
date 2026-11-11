@@ -28,7 +28,7 @@ export function redact(s: string): string {
 
 const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n) + '...' : s)
 // Cut first, so a huge pasted text never goes through the patterns at full size.
-const clean = (s: string, n: number) => clip(redact(s.slice(0, n * 4).replace(/\s+/g, ' ').trim()), n)
+const clean = (s: string, n: number) => clip(redact(s.replace(/\s+/g, ' ').trim().slice(0, n * 4)), n)
 
 /** What the session was doing: last prompts, files edited, lines that read like decisions. */
 export function buildCheckpoint(msgs: readonly Msg[], at: number, sid: string, project: string): Checkpoint {

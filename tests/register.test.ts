@@ -137,3 +137,35 @@ test('/tokens undo needs no scan, uses the logged file, backs it up, and skips p
   const again = (await $.command.run({ command: 'tokens', args: 'undo' } as never)) as { text?: string }
   expect(String(again.text)).toContain('Nothing to undo')
 })
+
+test('undo works for a 0.2.0 log entry with no file, using the newest backup file', async ($, on) => {
+  mock.store(on, { changes: [{ at: 1, id: 'old@m' }], 'backup:0': { at: 5, file: '/s.json', enabledPlugins: {} } })
+  mock.clock(on, { now: 9_000_000_000 })
+  let file = JSON.stringify({ enabledPlugins: { 'old@m': false } })
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('command.register', () => ({ value: { command: 'tokens' } }))
+  on('fs.read', () => ({ value: file }))
+  on('fs.write', (_, e) => { file = (e as unknown as { text: string }).text; return { value: undefined } })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as never)
+  const r = (await $.command.run({ command: 'tokens', args: 'undo' } as never)) as { text?: string }
+  expect(String(r.text)).toContain('old@m')
+  expect(JSON.parse(file).enabledPlugins['old@m']).toBe(true)
+})
+
+test('a settings file that stops parsing after the write is restored and the undo log is kept', async ($, on) => {
+  mock.store(on, { changes: [{ at: 1, id: 'old@m', file: '/s.json' }] })
+  mock.clock(on, { now: 9_000_000_000 })
+  const original = JSON.stringify({ enabledPlugins: { 'old@m': false } })
+  let file = original
+  let writes = 0
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('command.register', () => ({ value: { command: 'tokens' } }))
+  on('fs.read', () => ({ value: file }))
+  on('fs.write', (_, e) => { writes++; file = writes === 1 ? '{broken' : (e as unknown as { text: string }).text; return { value: undefined } })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as never)
+  const r = (await $.command.run({ command: 'tokens', args: 'undo' } as never)) as { text?: string }
+  expect(String(r.text)).toContain('Could not update')
+  expect(file).toBe(original)
+  const keep = (await $.command.run({ command: 'tokens', args: 'undo' } as never)) as { text?: string }
+  expect(String(keep.text)).not.toContain('Nothing to undo')
+})

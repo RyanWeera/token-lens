@@ -47,8 +47,8 @@ The mod does not hook tool calls or tool results, and does not change the system
 **Files the mod writes:** only `~/.claude/settings.json`, and only the `enabledPlugins` flags described above, when automatic tuning applies a plan or you run `/tokens undo`. It writes no other file.
 
 **Data stored**, in the engine's per-plugin store (`~/.claude/plugins/store/token-lens_*.json`):
-- Checkpoints: project path, session id, time, the last three prompts, files edited, up to five decision-like lines. Text is cut to 300 characters and secrets are redacted (private keys, `sk-` and `ghp_` style keys, AWS keys, JWTs, bearer tokens, `key=`/`token=`/`password=` values, URL credentials, long hex strings). Kept 14 days and the newest 10 per project.
-- Settings backups: the last 3 copies of `settings.json`, taken before each change or undo. They are a safety copy for manual recovery from the store file; no command restores a whole backup.
+- Checkpoints: project path, session id, time, the last three prompts, files edited, up to five decision-like lines. Text is cut to 300 characters (200 for paths and decisions) and secrets are redacted (private keys, `sk-` and `ghp_` style keys, AWS keys, JWTs, bearer tokens, `key=`/`token=`/`password=` values, URL credentials, long hex strings). Kept 14 days and the newest 10 per project. Checkpoints saved by 0.2.0 are not listed after the upgrade to 0.2.1 (the project key changed) and expire on their own.
+- Settings backups: the last 3 copies of the `enabledPlugins` flags (not the rest of `settings.json`, which can hold secrets), taken before each change or undo. They are a safety copy for manual recovery from the store file; no command restores one.
 - Change log: the last 50 plugin ids turned off, each with the settings file it was in (this is what `/tokens undo` reads).
 - Automatic tuning state: on or off, time of the last analysis and change.
 
@@ -58,7 +58,7 @@ The mod does not hook tool calls or tool results, and does not change the system
 
 ## Code that runs
 
-`/tokens`, `/tokens audit`, `/tokens plan` and the daily analysis run `node hooks/scan.mjs` from this mod's own folder (`$.plugin.root`), once, then it exits. It runs with this mod's folder as its working directory. `scan.mjs` only reads, and strips control characters from the names it prints. Nothing is run from any other folder, nothing is downloaded, and `npx` is never used. The mod uses the Node and TypeScript standard library only and has no dependencies.
+`/tokens`, `/tokens audit`, `/tokens plan` and the daily analysis run `node hooks/scan.mjs` from this mod's own folder (`$.plugin.root`), once, then it exits. It runs with this mod's folder as its working directory. `scan.mjs` only reads, skips symlinks and files over 1 MB in the audit, and strips control and bidirectional text characters from what it prints. Nothing is run from any other folder, nothing is downloaded, and `npx` is never used. The mod uses the Node and TypeScript standard library only and has no dependencies.
 
 ## Security rules this mod keeps
 
