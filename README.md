@@ -2,6 +2,17 @@
 
 A Claude Code mod that replaces the third-party Token Optimizer. It reports your token use, grades each session, folds long tool output, saves checkpoints across compaction, and tunes your setup to how you really use Claude. It has no network access and no background process, and every change it makes to what the model reads carries a label that names it and how to stop it.
 
+## Install
+
+From inside Claude Code:
+
+```text
+/plugin marketplace add RyanWeera/token-lens
+/plugin install token-lens@token-lens
+```
+
+Then start a new session. To update later, run `/plugin marketplace update token-lens`.
+
 ## Commands
 
 All commands are `/tokens <option>`. `/tokens help` prints the full list.
@@ -39,7 +50,7 @@ Every action is shown where it happens: a label in the text the model reads, a l
 1. **Tool output compression (default on, `/tokens compress off` stops it).** After a Bash, Grep or Glob call, long output is folded: colour codes and progress redraws go, a repeated line shows once with a count, and a label at the end says so. Output over 8,000 characters keeps about its first 2,400 and last 1,600 characters, with a label in the middle. A Glob or Grep list of more than 150 file names keeps the first 150. The full text is kept in the store, and the label names an id that the `expand` tool (`mcp__token-lens__expand`) takes to give it back. Errors, images and background tasks pass through unchanged.
 2. **Repeat reads (part of compression, `/tokens compress read off` stops it).** When the same lines of a file are read again within 30 minutes in the same context, the Read is answered with a note instead of the file: an outline when nothing changed, or only the changed lines. The note names the id for the full text. A compaction clears this memory, so the first Read after it goes through whole. The memory of earlier reads is never written to disk, but the full text of a withheld repeat Read is archived in the store for 3 days, like folded output, so that `expand` can return it. `/tokens compress read off` stops this, and `/tokens purge` deletes the archive.
 3. **Checkpoints:** before a compaction, before a subagent starts (at most every 10 minutes), after a failed or stopped turn, at session end, and every 20 minutes of work. A new session in a project with a checkpoint from another session in the last day shows a toast; nothing is added until you run `/tokens restore`.
-4. **Around a compaction (`/tokens auto off` stops this):** unless you typed your own `/compact` instructions, it tells the summarizer to keep the active task, the files edited and the decisions. After the compaction it adds the checkpoint back as a row labelled `[token-lens, added automatically after compaction...]`.
+4. **Around a compaction (`/tokens auto off` stops this):** unless you typed your own `/compact` instructions, it tells the summarizer to keep the active task, the files edited and the decisions. After the compaction it adds the checkpoint back as a row labelled `[token-lens, added automatically after compaction...]`. That row leaves out the files read and the tool errors, because they are text from outside the conversation; `/tokens restore` adds the full checkpoint.
 5. **After each answer:** grades the session (S to F, from context fill, compactions, stale reads, files re-read in loops, large tool results, edits per tool call and long subagent reports) and writes `~/.claude/token-lens/quality-<session>.json`. The crab-progress band and project-link read this file.
 6. **Nudges (default off, `/tokens nudge <name> on` turns one on).** A nudge is a labelled hint added beside your prompt, and a toast says so each time. `lean`: the context is over 25, 50 or 75% full. `quality`: the grade is low or dropped. `loop`: the request repeats an earlier one, the last 3 tool calls failed, or the same inline script ran 8 times. `route`: a small mechanical edit on an expensive model.
 7. **Once a day, a few seconds after session start:** deletes quality files older than 14 days. Unless `/tokens auto off` is set, it then reads your transcripts (last 30 days) and learns which skills, commands, subagents and MCP servers you really use. A toast shows what it found.
@@ -83,7 +94,7 @@ The mod does not change the system prompt and does not block any tool call other
 
 **Uninstall:** run `/tokens undo` if you want the plugins back, then `/tokens purge`, uninstall the mod, and delete `~/.claude/token-lens/` and `~/.claude/plugins/store/token-lens_*.json`. Note that `purge` also deletes the undo log.
 
-**Files read (read only):** `~/.claude/projects/**/*.jsonl` (transcripts, for the reports and the analysis); `~/.claude/settings.json`, `~/.claude/plugins/installed_plugins.json` and each plugin's folder (for the plan); for the audit, CLAUDE.md files up to the project root, skill and agent files, `~/.claude.json` and `.mcp.json` files; for `/tokens memory`, the project's memory folder; for `/tokens git`, the output of `git status` and `git diff HEAD` (run with fsmonitor, external diff and text conversion turned off, and not run at all when the repository's own config sets git filter commands). The audit prints only server names, the host of a URL or the command name, never env values, arguments or tokens.
+**Files read (read only):** `~/.claude/projects/**/*.jsonl` (transcripts, for the reports and the analysis); `~/.claude/settings.json`, `~/.claude/plugins/installed_plugins.json` and each plugin's folder (for the plan); for the audit, CLAUDE.md files up to the project root, skill and agent files, `~/.claude.json` and `.mcp.json` files; for `/tokens memory`, the project's memory folder; for `/tokens git`, the output of `git status` and `git diff HEAD` (run with repository hooks, fsmonitor, external diff, text conversion and submodules turned off, and not run at all when the repository's own config sets git filter commands). The audit prints only server names, the host of a URL or the command name, never env values, arguments or tokens.
 
 ## Code that runs
 

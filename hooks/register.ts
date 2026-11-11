@@ -347,7 +347,7 @@ export const register: Register = on => {
       if (!e.agentId) await patchSess($, sid, s => ({ ...s, compactions: (s.compactions ?? 0) + 1, cpAt: cp ? cp.at : s.cpAt }))
       if (cp && st.off) $.ui.toast('token-lens: checkpoint saved. /tokens restore adds it back to the conversation.')
       if (cp && !st.off) {
-        await $.session.append({ message: { type: 'user', content: [{ type: 'text', text: `[token-lens, added automatically after compaction; /tokens auto off stops this]\n${formatCheckpoint(cp)}` }] } })
+        await $.session.append({ message: { type: 'user', content: [{ type: 'text', text: `[token-lens, added automatically after compaction; /tokens auto off stops this]\n${formatCheckpoint({ ...cp, reads: [], errors: [] })}` }] } })
         $.ui.log('token-lens: checkpoint added back to the conversation after compaction.')
       }
     } catch (err) {

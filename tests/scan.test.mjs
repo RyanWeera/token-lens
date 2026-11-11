@@ -66,10 +66,14 @@ test('usage counts a repeated turn once and sums subagent files into the session
 test('audit flags a server loaded twice and never prints env values', () => {
   const dir = mkdtempSync(join(tmpdir(), 'tl-'))
   const cwd = mkdtempSync(join(tmpdir(), 'tl-cwd-'))
-  writeFileSync(join(cwd, '.mcp.json'), JSON.stringify({ mcpServers: { notion: { url: 'https://mcp.notion.com/mcp' }, 'plugin-notion': { url: 'https://mcp.notion.com/mcp', env: { KEY: 'SECRET123' } } } }))
+  writeFileSync(join(cwd, '.mcp.json'), JSON.stringify({ mcpServers: {
+    notion: { url: 'https://mcp.notion.com/mcp' }, 'plugin-notion': { url: 'https://mcp.notion.com/mcp', env: { KEY: 'SECRET123' } },
+    keyed: { command: 'x-mcp', args: ['--api-key', 'sk-ARGSECRET456'] }, 'keyed-copy': { command: 'x-mcp', args: ['sk-ARGSECRET456'] },
+  } }))
   const out = audit(cwd, dir)
   assert.match(out, /more than once|share the same target/)
-  assert.doesNotMatch(out, /SECRET123/)
+  assert.match(out, /share the same target \(x-mcp\): keyed, keyed-copy/)
+  assert.doesNotMatch(out, /SECRET123|ARGSECRET456/)
 })
 
 test('unusedPlugins lists only old, enabled, pure plugins with no trace of use', () => {
@@ -147,12 +151,26 @@ test('a linked .claude folder in a repository is not followed', async t => {
 
 const session = (over = {}) => ({ sid: 's1', label: 'p', start: 0, end: 0, turns: [], compactions: 0, prompts: [], tools: [], models: [], total: {}, hours: 0, ...over })
 
-test('git does not run in a repository whose own config sets filter commands', () => {
+test('git runs no repository hook, and does not run when the repository sets filter commands', () => {
   const d = mkdtempSync(join(tmpdir(), 'tl-git-'))
-  execFileSync('git', ['init', '-q'], { cwd: d })
+  const git = (...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { cwd: d })
+  git('init', '-q')
   writeFileSync(join(d, 'a.txt'), 'x')
+  git('add', 'a.txt')
+  git('commit', '-qm', 'one')
+  writeFileSync(join(d, 'b.txt'), 'new')
+  writeFileSync(join(d, '.git', 'hooks', 'post-index-change'), '#!/bin/sh\ntouch .git/hooked\n', { mode: 0o755 })
+  // A new file time with the same content makes a plain `git status` rewrite the index, which runs the hook.
+  utimesSync(join(d, 'a.txt'), new Date('2030-01-01'), new Date('2030-01-01'))
   assert.match(gitContext(d), /^1 changed file/)
-  execFileSync('git', ['config', 'filter.x.clean', 'cat'], { cwd: d })
+  assert.equal(existsSync(join(d, '.git', 'hooked')), false)
+  git('status', '--porcelain') // plain git does run it, so the check above means something
+  assert.equal(existsSync(join(d, '.git', 'hooked')), true)
+  git('config', 'extensions.worktreeConfig', 'true')
+  git('config', '--worktree', 'filter.y.clean', 'cat')
+  assert.match(gitContext(d), /^Not run/)
+  git('config', '--worktree', '--unset', 'filter.y.clean')
+  git('config', 'filter.x.clean', 'cat')
   assert.match(gitContext(d), /^Not run/)
 })
 

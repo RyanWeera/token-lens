@@ -1,0 +1,11 @@
+{
+  "name": "token-lens",
+  "owner": { "name": "RyanWeera" },
+  "plugins": [
+    {
+      "name": "token-lens",
+      "source": "./",
+      "description": "Local token reports, session grade, labelled tool output compression, opt-in nudges, checkpoints across compaction and a setup audit."
+    }
+  ]
+}

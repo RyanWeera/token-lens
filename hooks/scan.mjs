@@ -190,7 +190,12 @@ const safeHost = u => { try { return new URL(u).host } catch { return 'url' } }
 
 function mcpServers(cwd, dir, plugins) {
   const out = []
-  const take = (src, obj) => Object.entries(obj || {}).forEach(([name, c]) => out.push({ src, name, sig: c.url ? safeHost(c.url) : basename(String(c.command || '')) + ' ' + (c.args || []).filter(a => !/^-/.test(a)).slice(0, 1).join(' ') }))
+  // `sig` is printed: the URL host or the command name. `key` also holds the first plain argument, which can be a
+  // token, so it only matches duplicates and is never printed.
+  const take = (src, obj) => Object.entries(obj || {}).forEach(([name, c]) => {
+    const sig = c.url ? safeHost(c.url) : basename(String(c.command || ''))
+    out.push({ src, name, sig, key: c.url ? sig : `${sig} ${(c.args || []).filter(a => !/^-/.test(a)).slice(0, 1).join(' ')}` })
+  })
   try { const j = JSON.parse(readFileSync(process.env.CLAUDE_CONFIG_DIR ? join(dir, '.claude.json') : join(homedir(), '.claude.json'), 'utf8')); take('user', j.mcpServers); take('project', (j.projects?.[cwd] ?? j.projects?.[cwd.replace(/\\/g, '/')])?.mcpServers) } catch { /* none */ }
   try { take('.mcp.json', JSON.parse(readSmall(join(cwd, '.mcp.json'))).mcpServers) } catch { /* none */ }
   for (const p of plugins) {
@@ -222,8 +227,8 @@ export function audit(cwd, dir = claudeDir()) {
   for (const m of mcp) groups.set(norm(m.name) || m.name, [...(groups.get(norm(m.name) || m.name) || []), m])
   for (const [, g] of groups) if (g.length > 1) tips.push(`MCP server loaded more than once: ${g.map(m => `${m.name} (${m.src})`).join(' and ')}. Keep one.`)
   const bySig = new Map()
-  for (const m of mcp) bySig.set(m.sig, [...(bySig.get(m.sig) || []), m])
-  for (const [sig, g] of bySig) if (g.length > 1 && sig.trim() && new Set(g.map(m => norm(m.name))).size > 1) tips.push(`MCP servers share the same target (${sig}): ${g.map(m => m.name).join(', ')}.`)
+  for (const m of mcp) bySig.set(m.key, [...(bySig.get(m.key) || []), m])
+  for (const [key, g] of bySig) if (g.length > 1 && key.trim() && new Set(g.map(m => norm(m.name))).size > 1) tips.push(`MCP servers share the same target (${g[0].sig}): ${g.map(m => m.name).join(', ')}.`)
   if (!tips.length) tips.push('Nothing stands out.')
   return [
     'Setup audit (read only; nothing was changed)',
@@ -636,19 +641,23 @@ export function memory(cwd, dir = claudeDir()) {
   }).map(strip).join('\n\n')
 }
 
-// What the uncommitted changes would cost to read. Plain git commands, with repository hooks and helpers turned off.
+// An absolute folder that is never created: as core.hooksPath it means no repository hook runs.
+const NO_HOOKS = join(dirname(fileURLToPath(import.meta.url)), 'no-hooks')
+
+// What the uncommitted changes would cost to read. Plain git commands with repository hooks, fsmonitor,
+// external diff, text conversion and submodules turned off.
 export function gitContext(cwd) {
-  const git = args => execFileSync('git', ['-c', 'core.fsmonitor=false', '-c', 'core.untrackedCache=false', ...args], { cwd, encoding: 'utf8', timeout: 20_000, maxBuffer: 20e6, stdio: ['ignore', 'pipe', 'ignore'] })
-  // A filter set in the repository's own config runs a command on `git status`, so none of it runs then.
+  const git = args => execFileSync('git', ['--no-optional-locks', '-c', `core.hooksPath=${NO_HOOKS}`, '-c', 'core.fsmonitor=false', '-c', 'core.untrackedCache=false', ...args], { cwd, encoding: 'utf8', timeout: 20_000, maxBuffer: 20e6, stdio: ['ignore', 'pipe', 'ignore'] })
+  // A filter set in the repository's own config (local or worktree) runs a command on `git status`, so none of it runs then.
   let filters = ''
-  try { filters = git(['config', '--local', '--includes', '--get-regexp', '^filter\\.']) } catch { /* none set, or not a repository */ }
-  if (filters.trim()) return 'Not run: this repository sets its own git filter commands, which git status would run.'
+  try { filters = git(['config', '--show-scope', '--includes', '--get-regexp', '^filter\\.']) } catch { /* none set */ }
+  if (filters.split('\n').some(l => /^(local|worktree)\s/.test(l))) return 'Not run: this repository sets its own git filter commands, which git status would run.'
   let status
-  try { status = git(['status', '--porcelain=v1', '-uall']) } catch { return 'Not a git repository (or git is not installed).' }
+  try { status = git(['status', '--porcelain=v1', '-uall', '--ignore-submodules=all']) } catch { return 'Not a git repository (or git is not installed).' }
   const rows = status.split('\n').filter(Boolean).map(l => ({ code: l.slice(0, 2), file: l.slice(3).replace(/^.* -> /, '').replace(/^"|"$/g, '') }))
   if (!rows.length) return 'No uncommitted changes.'
   let diff = 0
-  try { diff = git(['diff', 'HEAD', '--no-ext-diff', '--no-textconv', '--no-color']).length } catch { /* no HEAD yet */ }
+  try { diff = git(['diff', 'HEAD', '--no-ext-diff', '--no-textconv', '--no-color', '--ignore-submodules=all']).length } catch { /* no HEAD yet */ }
   const sized = rows.map(r => { let s = 0; try { const st = lstatSync(join(cwd, r.file)); s = st.isFile() ? st.size : 0 } catch { /* deleted */ } return { ...r, s } }).sort((a, b) => b.s - a.s)
   const whole = sized.reduce((a, r) => a + r.s, 0)
   return [`${rows.length} changed file(s). Reading them whole: about ${n(tok(whole))} tokens. The diff alone: about ${n(tok(diff))} tokens.`, '',
