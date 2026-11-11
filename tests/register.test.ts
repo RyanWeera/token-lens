@@ -3,7 +3,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 import { buildCheckpoint, doomed, modeOf, projKey, redact, RETAIN_MS } from '../hooks/checkpoint'
-import { compress, cut, fold, hashText, reread } from '../hooks/compress'
+import { compress, cut, fold, reread } from '../hooks/compress'
 import { nudges, similarity, type NudgeInput } from '../hooks/nudges'
 import { gradeOf, quality } from '../hooks/quality'
 
@@ -215,7 +215,7 @@ test('compress leaves a small saving alone and cuts long output to its start and
 test('reread: outline for an unchanged range, changed lines only for a small change, full text otherwise', () => {
   const lines = Array.from({ length: 120 }, (_, i) => (i % 20 === 0 ? `export function f${i}() {` : `  total += ${i} // padding text to make the file long enough`))
   const a = lines.join('\n')
-  const prev = { hash: hashText(a), at: 0, content: a }
+  const prev = { at: 0, content: a }
   const same = reread(prev, a, 1, 60_000, 'r1')!
   expect(same).toContain('unchanged')
   expect(same).toContain('  1: export function f0() {')
@@ -272,6 +272,15 @@ test('the checkpoint records the kind of work, files read most and the last erro
   expect(cp.errors?.length).toBe(3)
   expect(cp.why).toBe('periodic')
   expect(modeOf([{ role: 'assistant', text: '', toolUses: Array.from({ length: 5 }, () => u('Edit', '/d.md')) }] as never)).toBe('writing')
+  const withheld = { tool: 'Read', input: { file_path: '/a.ts' }, isError: true, text: '[token-lens: this range is unchanged]' }
+  const own = buildCheckpoint([{ role: 'user', text: 'go on', toolUses: [] }, { role: 'assistant', text: '', toolUses: [withheld, withheld, withheld, u('Read', '/b.ts'), u('Read', '/c.ts')] }] as never, 1, 'sid', '/p')
+  expect(own.mode).not.toBe('debugging')
+  expect(own.errors).toEqual([])
+})
+
+test('a fold that only strips colour codes still carries a label', () => {
+  const coloured = Array.from({ length: 100 }, (_, i) => `\x1b[32mline ${i}\x1b[0m`).join('\n')
+  expect(compress(coloured, 'id2')!.text).toContain('[token-lens: colour codes and progress redraws removed')
 })
 
 // ---- hooks added in 0.3.0 ----

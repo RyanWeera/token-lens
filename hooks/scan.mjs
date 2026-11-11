@@ -10,6 +10,10 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 
+// On Windows a bare program name is otherwise looked up in the working folder first, so a git.exe that a
+// repository ships could run in place of the real git.
+if (process.platform === 'win32') process.env.NoDefaultCurrentDirectoryInExePath = '1'
+
 // Names come from files a repository controls: no control or escape characters reach the terminal.
 const strip = t => t.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f\xad\u061c\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]/g, '')
 // A regular file under 1 MB, read as text; null for anything else (a symlink, a directory, a device, a big file).
@@ -319,6 +323,8 @@ export async function plan(days = 30, now = Date.now(), dir = claudeDir()) {
 export const dataDir = (dir = claudeDir()) => join(dir, 'token-lens')
 const zero = () => ({ input: 0, out: 0, cw: 0, cr: 0, usd: 0, turns: 0 })
 const promptText = c => (typeof c === 'string' ? c : Array.isArray(c) && !c.some(b => b?.type === 'tool_result') ? c.filter(b => b?.type === 'text').map(b => b.text).join('\n') : '')
+// A repeat Read that token-lens withheld is stored as an error result; it is not a real failure.
+const resultText = r => (typeof r.content === 'string' ? r.content : Array.isArray(r.content) ? r.content.map(b => b?.text ?? '').join('') : '')
 const resultLen = r => (typeof r.content === 'string' ? r.content.length : Array.isArray(r.content) ? r.content.reduce((s, b) => s + (b?.text?.length ?? (b?.type === 'image' ? 6000 : 0)), 0) : 0)
 
 async function readSession(file, since, s, sub) {
@@ -351,7 +357,7 @@ async function readSession(file, since, s, sub) {
       s.turns.set(id, rec)
       if (!sub && m.model && m.model !== '<synthetic>' && s.models.at(-1) !== m.model) s.models.push(m.model)
     } else if (o.type === 'user' && m) {
-      for (const b of Array.isArray(m.content) ? m.content : []) if (b?.type === 'tool_result') results.set(b.tool_use_id, { err: b.is_error === true, len: resultLen(b) })
+      for (const b of Array.isArray(m.content) ? m.content : []) if (b?.type === 'tool_result') results.set(b.tool_use_id, { err: b.is_error === true && !resultText(b).includes('[token-lens'), len: resultLen(b) })
       const p = sub || o.isMeta ? '' : promptText(m.content)
       if (p.trim() && !p.trimStart().startsWith('<')) s.prompts.push({ t, text: p.slice(0, 2000), words: p.split(/\s+/).filter(Boolean).length })
     }
@@ -633,6 +639,10 @@ export function memory(cwd, dir = claudeDir()) {
 // What the uncommitted changes would cost to read. Plain git commands, with repository hooks and helpers turned off.
 export function gitContext(cwd) {
   const git = args => execFileSync('git', ['-c', 'core.fsmonitor=false', '-c', 'core.untrackedCache=false', ...args], { cwd, encoding: 'utf8', timeout: 20_000, maxBuffer: 20e6, stdio: ['ignore', 'pipe', 'ignore'] })
+  // A filter set in the repository's own config runs a command on `git status`, so none of it runs then.
+  let filters = ''
+  try { filters = git(['config', '--local', '--includes', '--get-regexp', '^filter\\.']) } catch { /* none set, or not a repository */ }
+  if (filters.trim()) return 'Not run: this repository sets its own git filter commands, which git status would run.'
   let status
   try { status = git(['status', '--porcelain=v1', '-uall']) } catch { return 'Not a git repository (or git is not installed).' }
   const rows = status.split('\n').filter(Boolean).map(l => ({ code: l.slice(0, 2), file: l.slice(3).replace(/^.* -> /, '').replace(/^"|"$/g, '') }))
@@ -693,7 +703,7 @@ ol{padding-left:20px}li{margin-bottom:8px}.wrap{overflow-x:auto}</style></head><
 
 export function open(file) {
   const [cmd, args] = process.platform === 'win32' ? ['explorer.exe', [file]] : process.platform === 'darwin' ? ['open', [file]] : ['xdg-open', [file]]
-  spawn(cmd, args, { detached: true, stdio: 'ignore' }).unref()
+  spawn(cmd, args, { detached: true, stdio: 'ignore' }).on('error', () => {}).unref()
 }
 
 // Deletes token-lens's own quality files older than 14 days. Nothing else.
@@ -725,7 +735,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     doctor: () => doctor(arg || ''),
     memory: () => memory(arg || process.cwd()),
     git: () => gitContext(arg || process.cwd()),
-    dashboard: async () => { const f = await dashboard(days, { total_30d_tokens: Number(extra) || 0 }); open(f); return `Dashboard written to ${f} and opened.` },
+    dashboard: async () => { const f = await dashboard(days, { total_30d_tokens: Number(extra) || 0 }); open(f); return `Dashboard written to ${f}; opening it.` },
     prune: () => prune(),
   }
   const out = modes[mode] ? await modes[mode]() : `usage: scan.mjs ${Object.keys(modes).join(' | ')}`

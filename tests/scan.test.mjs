@@ -8,7 +8,8 @@ import test from 'node:test'
 // The audit reads <config dir>/.claude.json when this is set; keep tests off the real one.
 process.env.CLAUDE_CONFIG_DIR = mkdtempSync(join(tmpdir(), 'tl-conf-'))
 
-import { audit, cost, dashboard, findings, memory, plan, price, prune, qualityFiles, unusedPlugins, usage } from '../hooks/scan.mjs'
+import { execFileSync } from 'node:child_process'
+import { audit, cost, dashboard, findings, gitContext, memory, plan, price, prune, qualityFiles, unusedPlugins, usage } from '../hooks/scan.mjs'
 
 const M = 1e6
 const near = (a, b) => assert.ok(Math.abs(a - b) < 1e-9, `${a} != ${b}`)
@@ -145,6 +146,15 @@ test('a linked .claude folder in a repository is not followed', async t => {
 // ---- reports added in 0.3.0 ----
 
 const session = (over = {}) => ({ sid: 's1', label: 'p', start: 0, end: 0, turns: [], compactions: 0, prompts: [], tools: [], models: [], total: {}, hours: 0, ...over })
+
+test('git does not run in a repository whose own config sets filter commands', () => {
+  const d = mkdtempSync(join(tmpdir(), 'tl-git-'))
+  execFileSync('git', ['init', '-q'], { cwd: d })
+  writeFileSync(join(d, 'a.txt'), 'x')
+  assert.match(gitContext(d), /^1 changed file/)
+  execFileSync('git', ['config', 'filter.x.clean', 'cat'], { cwd: d })
+  assert.match(gitContext(d), /^Not run/)
+})
 
 test('findings rank binary reads first and report retry churn and cascades', () => {
   const fail = { name: 'Bash', key: 'Bash:{"command":"make"}', path: '', sub: false, err: true, len: 100 }

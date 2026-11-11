@@ -44,15 +44,8 @@ export function cut(text: string, id: string, keep = KEEP): string {
 export function compress(text: string, id: string): { text: string; archived: boolean } | null {
   const folded = fold(text)
   const archived = folded.length > ARCHIVE_AT
-  const out = archived ? cut(folded, id) : folded
+  const out = archived ? cut(folded, id) : `${folded}\n[token-lens: colour codes and progress redraws removed, repeated lines folded. /tokens compress off stops this]`
   return text.length - out.length >= Math.max(300, text.length * 0.1) ? { text: out, archived } : null
-}
-
-/** A short, stable fingerprint of a text, to tell an unchanged re-read from a changed one. */
-export function hashText(s: string): string {
-  let h = 0x811c9dc5
-  for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 0x01000193) >>> 0
-  return `${h.toString(36)}.${s.length}`
 }
 
 const DECL = /^\s*(?:(?:export|public|private|protected|static|async|pub|default|abstract)\s+)*(?:function|class|interface|type|enum|const|let|var|def|fn|struct|impl|trait|module|namespace|func|object)\b|^#{1,6}\s/
@@ -62,7 +55,7 @@ export function outline(content: string, startLine = 1, max = 40): string[] {
   return content.split('\n').map((l, i) => ({ l, n: startLine + i })).filter(x => DECL.test(x.l)).slice(0, max).map(x => `  ${x.n}: ${x.l.trim().slice(0, 140)}`)
 }
 
-export type Seen = { hash: string; at: number; content: string }
+export type Seen = { at: number; content: string }
 
 /**
  * A repeat Read of the same range in this conversation: an outline when the file is unchanged, the changed
@@ -73,7 +66,7 @@ export function reread(prev: Seen | undefined, content: string, startLine: numbe
   if (!prev || now - prev.at > REREAD_WINDOW_MS || content.length < OUTLINE_MIN) return null
   const mins = Math.max(1, Math.round((now - prev.at) / 60_000))
   const back = `[Full text again: call ${EXPAND} with id "${id}". /tokens compress read off stops this]`
-  if (prev.hash === hashText(content)) {
+  if (prev.content === content) {
     const o = outline(content, startLine)
     return [`[token-lens: this range is unchanged since you read it ${mins} min ago; that copy is still above in this conversation.${o.length ? ' Outline (line: text):' : ''}]`, ...o, back].join('\n')
   }

@@ -2,7 +2,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import { buildCheckpoint, cpKey, doomed, forProject, formatCheckpoint, tuneInstructions } from './checkpoint'
 import type { Checkpoint, Msg } from './checkpoint'
-import { compress, EXPAND, hashText, reread } from './compress'
+import { compress, EXPAND, reread } from './compress'
 import type { Seen } from './compress'
 import { NUDGES, nudges } from './nudges'
 import type { Nudge, NudgeState } from './nudges'
@@ -67,8 +67,8 @@ type Cfg = { compress?: Partial<Record<Part, boolean>>; nudges?: Nudge[] }
 type Sess = { at: number; start?: number; compactions?: number; nudge?: NudgeState; quality?: Quality; cpAt?: number; agentCpAt?: number }
 type Savings = { days?: Record<string, number>; sessions?: Record<string, number> }
 
-// The last full Read of each range, per session and agent. Memory only: file contents never go to disk.
-// Losing it (a reload) only means the next Read goes through whole.
+// The last full Read of each range, per session and agent, held in memory only. A withheld repeat Read is
+// archived in the store like folded output (3 days). Losing this map (a reload) only means the next Read goes through whole.
 const seen = new Map<string, Seen>()
 
 const dayOf = (t: number) => new Date(t).toISOString().slice(0, 10)
@@ -481,12 +481,12 @@ export const register: Register = on => {
       const note = reread(prev, file.content, start, now, e.tool_use_id)
       if (!note) {
         seen.delete(key)
-        if (file.content.length <= ARC_CHARS) seen.set(key, { hash: hashText(file.content), at: now, content: file.content })
+        if (file.content.length <= ARC_CHARS) seen.set(key, { at: now, content: file.content })
         while (seen.size > SEEN_MAX) seen.delete(seen.keys().next().value!)
         return r
       }
       // After a delta the context holds the old copy plus the changes, so the next Read goes through whole.
-      if (prev!.hash !== hashText(file.content)) seen.delete(key)
+      if (prev!.content !== file.content) seen.delete(key)
       await archive($, e.tool_use_id, numbered(file.content, start))
       await credit($, file.content.length - note.length)
       return { deny: note }
