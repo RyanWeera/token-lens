@@ -169,3 +169,23 @@ test('a settings file that stops parsing after the write is restored and the und
   const keep = (await $.command.run({ command: 'tokens', args: 'undo' } as never)) as { text?: string }
   expect(String(keep.text)).not.toContain('Nothing to undo')
 })
+
+test('a secret split by the cut leaves no fragment, and a 0.2.0 backup is trimmed to the plugin flags', async ($, on) => {
+  const text = 'x '.repeat(500) + 'gh' + 'p_' + 'a'.repeat(36)
+  const cp = buildCheckpoint([{ role: 'user', text, toolUses: [] }] as never, 1, 'sid', '/p')
+  expect(cp.task).not.toContain('ghp_')
+  const db: Record<string, unknown> = { 'backup:0': { at: 1, file: '/s.json', text: JSON.stringify({ env: { K: 'SECRETVALUE' }, enabledPlugins: { 'a@m': false } }) } }
+  const written: unknown[] = []
+  mock.clock(on, { now: 9_000_000_000 })
+  on('store.get', (_, e) => ({ value: db[(e as unknown as { key: string }).key] }))
+  on('store.keys', () => ({ value: Object.keys(db) }))
+  on('store.delete', () => ({ value: undefined }))
+  on('store.set', (_, e) => { const x = e as unknown as { key: string; value: unknown }; db[x.key] = x.value; written.push(x); return { value: undefined } })
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('command.register', () => ({ value: { command: 'tokens' } }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as never)
+  const out = JSON.stringify(written)
+  expect(out).toContain('backup:0')
+  expect(out).not.toContain('SECRETVALUE')
+  expect(out).toContain('a@m')
+})

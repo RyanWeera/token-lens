@@ -29,7 +29,7 @@ type Plan = { days: number; sessions: number; compactions: number; settingsPath:
 // folder, so a program lookup never starts in the project the session opened.
 async function scan($: EngineInterface, args: string[]): Promise<string> {
   const r = await $.process.run(['node', `${$.plugin.root}/hooks/scan.mjs`, ...args], { timeoutMs: 120_000, cwd: $.plugin.root })
-  return r.exitCode === 0 ? r.stdout : `token-lens: scan failed (exit ${r.exitCode}): ${r.stderr.slice(0, 500).replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, '')}`
+  return r.exitCode === 0 ? r.stdout : `token-lens: scan failed (exit ${r.exitCode}): ${r.stderr.slice(0, 500).replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f\xad\u061c\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]/g, '')}`
 }
 
 async function getPlan($: EngineInterface): Promise<Plan | string> {
@@ -45,7 +45,7 @@ async function save($: EngineInterface, msgs: readonly Msg[]): Promise<Checkpoin
   return cp
 }
 
-// Sets enabledPlugins flags in settings.json. The whole file is copied to the store first, the result is re-read,
+// Sets enabledPlugins flags in settings.json. The flags are copied to the store first, the result is re-read,
 // and the original is put back if it no longer parses. Only flags that differ are changed; returns those ids.
 async function setPlugins($: EngineInterface, path: string, ids: string[], value: boolean, now: number, limit = 99): Promise<string[]> {
   const raw = await $.fs.read(path)
@@ -57,8 +57,8 @@ async function setPlugins($: EngineInterface, path: string, ids: string[], value
   await $.store.set(`backup:${slot}`, { at: now, file: path, enabledPlugins: settings.enabledPlugins })
   await $.store.set('backup-next', slot + 1)
   for (const id of hit) settings.enabledPlugins![id] = value
-  await $.fs.write(path, JSON.stringify(settings, null, 2) + '\n')
   try {
+    await $.fs.write(path, JSON.stringify(settings, null, 2) + '\n')
     JSON.parse(await $.fs.read(path))
   } catch {
     await $.fs.write(path, raw)
@@ -69,7 +69,10 @@ async function setPlugins($: EngineInterface, path: string, ids: string[], value
 
 // Turns off the plan's unused plugins and logs them, with the file, for /tokens undo.
 async function applyPlan($: EngineInterface, plan: Plan, now: number): Promise<string[]> {
-  const hit = await setPlugins($, plan.settingsPath, plan.candidates.map(c => c.id), false, now, MAX_PER_RUN).catch(() => [] as string[])
+  const hit = await setPlugins($, plan.settingsPath, plan.candidates.map(c => c.id), false, now, MAX_PER_RUN).catch((err: unknown) => {
+    $.ui.log(`token-lens: could not change settings.json: ${String(err).slice(0, 200)}`)
+    return [] as string[]
+  })
   if (!hit.length) return []
   const log = ((await $.store.get('changes')) as Change[] | undefined) ?? []
   await $.store.set('changes', [...log, ...hit.map(id => ({ at: now, id, file: plan.settingsPath }))].slice(-50))
@@ -103,6 +106,14 @@ export const register: Register = on => {
     })
     const now = await $.clock.now()
     for (const k of doomed(await $.store.keys(), now)) await $.store.delete(k)
+    // 0.2.0 kept the whole settings.json in a backup. Keep only the plugin flags.
+    for (const i of [0, 1, 2]) {
+      const b = (await $.store.get(`backup:${i}`)) as { at: number; file: string; text?: string } | undefined
+      if (b?.text === undefined) continue
+      let flags: unknown
+      try { flags = (JSON.parse(b.text) as { enabledPlugins?: unknown }).enabledPlugins } catch { /* none */ }
+      await $.store.set(`backup:${i}`, { at: b.at, file: b.file, enabledPlugins: flags })
+    }
     // Once, a few seconds after start, so the first prompt is not held. Not a repeating timer.
     $.clock.after(5_000, async () => {
       try {

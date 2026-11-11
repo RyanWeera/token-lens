@@ -2,13 +2,24 @@
 // Usage: node scan.mjs usage <days> | audit <cwd> | plan <days>
 import { createReadStream, existsSync, lstatSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { basename, dirname, join, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 
 // Names come from files a repository controls: no control or escape characters reach the terminal.
-const strip = t => t.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g, '')
+const strip = t => t.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f\xad\u061c\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]/g, '')
 // A regular file under 1 MB, read as text; null for anything else (a symlink, a directory, a device, a big file).
+// True when no part of p below root is a symlink or junction (so a read never follows a link a repository planted).
+const plain = (root, p) => {
+  const rel = relative(root, p)
+  if (rel.startsWith('..') || isAbsolute(rel)) return false
+  let cur = root
+  for (const seg of rel.split(sep)) {
+    cur = join(cur, seg)
+    try { if (lstatSync(cur).isSymbolicLink()) return false } catch { return false }
+  }
+  return true
+}
 const readSmall = f => { const st = lstatSync(f); return st.isFile() && st.size < 1e6 ? readFileSync(f, 'utf8') : null }
 
 export const claudeDir = () => process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude')
@@ -122,7 +133,8 @@ export async function usage(days, now = Date.now(), dir = claudeDir()) {
 const tok = chars => Math.round(chars / 4)
 function description(file) {
   let t
-  try { t = readFileSync(file, 'utf8') } catch { return '' }
+  try { t = readSmall(file) } catch { return '' }
+  if (t === null) return ''
   const m = t.match(/^---\r?\n([\s\S]*?)\r?\n---/)
   if (!m) return ''
   const lines = m[1].split(/\r?\n/)
@@ -136,7 +148,7 @@ function description(file) {
 function claudeMdChain(cwd, dir) {
   const files = [join(dir, 'CLAUDE.md')]
   for (let d = resolve(cwd); ; d = dirname(d)) {
-    files.push(join(d, 'CLAUDE.md'), join(d, '.claude', 'CLAUDE.md'))
+    files.push(...[join(d, 'CLAUDE.md'), join(d, '.claude', 'CLAUDE.md')].filter(f => plain(d, f)))
     if (dirname(d) === d) break
   }
   const seen = new Set()
@@ -149,7 +161,7 @@ function claudeMdChain(cwd, dir) {
     for (const m of text.matchAll(/^@(\S+)/gm)) {
       if (seen.size >= 100 || /^[\\/]{2}/.test(m[1])) continue
       const p = resolve(dirname(f), m[1])
-      if (seen.has(p)) continue
+      if (seen.has(p) || !plain(dirname(f), p)) continue
       seen.add(p)
       try { imp += readSmall(p)?.length ?? 0 } catch { /* none */ }
     }
@@ -172,18 +184,19 @@ function mcpServers(cwd, dir, plugins) {
   const out = []
   const take = (src, obj) => Object.entries(obj || {}).forEach(([name, c]) => out.push({ src, name, sig: c.url ? safeHost(c.url) : basename(String(c.command || '')) + ' ' + (c.args || []).filter(a => !/^-/.test(a)).slice(0, 1).join(' ') }))
   try { const j = JSON.parse(readFileSync(process.env.CLAUDE_CONFIG_DIR ? join(dir, '.claude.json') : join(homedir(), '.claude.json'), 'utf8')); take('user', j.mcpServers); take('project', (j.projects?.[cwd] ?? j.projects?.[cwd.replace(/\\/g, '/')])?.mcpServers) } catch { /* none */ }
-  try { take('.mcp.json', JSON.parse(readFileSync(join(cwd, '.mcp.json'), 'utf8')).mcpServers) } catch { /* none */ }
+  try { take('.mcp.json', JSON.parse(readSmall(join(cwd, '.mcp.json'))).mcpServers) } catch { /* none */ }
   for (const p of plugins) {
-    try { const j = JSON.parse(readFileSync(join(p.path, '.mcp.json'), 'utf8')); take(p.id, j.mcpServers || j) } catch { /* none */ }
+    try { const j = JSON.parse(readSmall(join(p.path, '.mcp.json'))); take(p.id, j.mcpServers || j) } catch { /* none */ }
   }
   return out
 }
 
 export function audit(cwd, dir = claudeDir()) {
   const plugins = installedPlugins(dir)
-  const roots = [join(dir, 'skills'), join(cwd, '.claude', 'skills'), ...plugins.map(p => join(p.path, 'skills'))]
+  const own = n => [join(cwd, '.claude', n)].filter(r => plain(cwd, r))
+  const roots = [join(dir, 'skills'), ...own('skills'), ...plugins.map(p => join(p.path, 'skills'))]
   const skills = roots.flatMap(r => [...walk(r, 3)].filter(f => basename(f) === 'SKILL.md').map(f => ({ name: basename(dirname(f)), chars: description(f).length })))
-  const agentFiles = [join(dir, 'agents'), join(cwd, '.claude', 'agents'), ...plugins.map(p => join(p.path, 'agents'))].flatMap(r => [...walk(r, 2)].filter(f => f.endsWith('.md')))
+  const agentFiles = [join(dir, 'agents'), ...own('agents'), ...plugins.map(p => join(p.path, 'agents'))].flatMap(r => [...walk(r, 2)].filter(f => f.endsWith('.md')))
   const agents = agentFiles.map(f => ({ name: basename(f, '.md'), chars: description(f).length }))
   const md = claudeMdChain(cwd, dir)
   const mcp = mcpServers(cwd, dir, plugins)

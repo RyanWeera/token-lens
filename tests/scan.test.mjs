@@ -1,9 +1,12 @@
 // Run: node --test tests
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
+
+// The audit reads <config dir>/.claude.json when this is set; keep tests off the real one.
+process.env.CLAUDE_CONFIG_DIR = mkdtempSync(join(tmpdir(), 'tl-conf-'))
 
 import { audit, cost, plan, price, unusedPlugins, usage } from '../hooks/scan.mjs'
 
@@ -127,4 +130,14 @@ test('a plugin id with control characters is ignored', () => {
   writeFileSync(join(path, 'skills', 's', 'SKILL.md'), '---\nname: s\ndescription: d\n---\n')
   writeFileSync(join(dir, 'plugins', 'installed_plugins.json'), JSON.stringify({ plugins: { 'evil\u001b]0;x\u0007@m': [{ installPath: path, installedAt: '2020-01-01T00:00:00Z' }] } }))
   assert.deepEqual(unusedPlugins(dir, { 'evil\u001b]0;x\u0007@m': true }, new Set(), Date.now()), [])
+})
+
+test('a linked .claude folder in a repository is not followed', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'tl-'))
+  const cwd = mkdtempSync(join(tmpdir(), 'tl-cwd-'))
+  const elsewhere = mkdtempSync(join(tmpdir(), 'tl-else-'))
+  mkdirSync(join(elsewhere, 'skills', 'planted'), { recursive: true })
+  writeFileSync(join(elsewhere, 'skills', 'planted', 'SKILL.md'), '---\nname: planted\ndescription: should not be read\n---\n')
+  try { symlinkSync(elsewhere, join(cwd, '.claude'), 'junction') } catch { return t.skip('cannot make a link here') }
+  assert.doesNotMatch(audit(cwd, dir), /planted/)
 })
