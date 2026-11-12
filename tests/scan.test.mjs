@@ -122,10 +122,10 @@ test('the audit survives a CLAUDE.md that is a directory, skips symlinks and net
   mkdirSync(join(cwd, 'CLAUDE.md'))
   mkdirSync(join(cwd, '.claude', 'skills', 'bad\u202ename'), { recursive: true })
   writeFileSync(join(cwd, '.claude', 'skills', 'bad\u202ename', 'SKILL.md'), '---\nname: x\ndescription: d\n---\n')
-  writeFileSync(join(cwd, '.mcp.json'), JSON.stringify({ mcpServers: { ['evil\u001b[2Jname']: { url: 'https://h.example/x' } } }))
+  writeFileSync(join(cwd, '.mcp.json'), JSON.stringify({ mcpServers: { ['evil\u001b[2Jname\u{e0041}\ufe0f']: { url: 'https://h.example/x' } } }))
   const out = audit(cwd, dir)
   assert.match(out, /Setup audit/)
-  assert.doesNotMatch(out, /[\u001b\u202e]/)
+  assert.doesNotMatch(out, /[\u001b\u202e\ufe0f\u{e0041}]/u)
 })
 
 test('a plugin id with control characters is ignored', () => {
@@ -159,11 +159,12 @@ test('git runs no repository hook, and does not run when the repository sets fil
   writeFileSync(join(d, 'a.txt'), 'x')
   git('add', 'a.txt')
   git('commit', '-qm', 'one')
-  writeFileSync(join(d, 'b.txt'), 'new')
+  writeFileSync(join(d, 'b.txt'), 'new\n'.repeat(100))
   writeFileSync(join(d, '.git', 'hooks', 'post-index-change'), '#!/bin/sh\ntouch .git/hooked\n', { mode: 0o755 })
   // A new file time with the same content makes a plain `git status` rewrite the index, which runs the hook.
   utimesSync(join(d, 'a.txt'), new Date('2030-01-01'), new Date('2030-01-01'))
-  assert.match(gitContext(d), /^1 changed file/)
+  // b.txt is untracked, so `git diff HEAD` leaves it out; its whole size still counts toward the diff.
+  assert.match(gitContext(d), /^1 changed file\(s\)\. Reading them whole: about 100 tokens\. The diff alone: about 100 tokens\./)
   assert.equal(existsSync(join(d, '.git', 'hooked')), false)
   // From a subfolder the sizes still come from the repository root.
   mkdirSync(join(d, 'sub'))
@@ -184,6 +185,20 @@ test('git runs no repository hook, and does not run when the repository sets fil
   const path = process.env.PATH
   process.env.PATH = ''
   try { assert.match(gitContext(d), /^Not run: git could not check/) } finally { process.env.PATH = path }
+})
+
+test('a big untracked file with a non-ASCII name keeps its size and gets the right tip', () => {
+  const d = mkdtempSync(join(tmpdir(), 'tl-new-'))
+  const git = (...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'core.hooksPath=.git/hooks', '-c', 'commit.gpgSign=false', ...a], { cwd: d, stdio: ['ignore', 'pipe', 'ignore'] })
+  git('init', '-q')
+  writeFileSync(join(d, 'a.txt'), 'one')
+  git('add', 'a.txt')
+  git('commit', '-qm', 'one')
+  writeFileSync(join(d, 'café.txt'), 'x'.repeat(40_000))
+  const out = gitContext(d)
+  assert.match(out, /^1 changed file\(s\)\. Reading them whole: about 10\.0k tokens\. The diff alone: about 10\.0k tokens\./)
+  assert.match(out, /10\.0k {2}café\.txt/)
+  assert.match(out, /reading the diff saves little/)
 })
 
 test('a partial clone with a missing blob runs no remote command from the repository config', () => {

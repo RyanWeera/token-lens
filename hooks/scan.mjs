@@ -14,10 +14,11 @@ import { fileURLToPath } from 'node:url'
 // repository ships could run in place of the real git.
 if (process.platform === 'win32') process.env.NoDefaultCurrentDirectoryInExePath = '1'
 
-// Names come from files a repository controls: no control or escape characters reach the terminal.
+// Names come from files a repository controls: no control, escape or invisible characters (tag characters
+// can hide text) reach the terminal or the model.
 // A name taken from a repository or config file is printed at most 80 characters long.
 const cap = s => (s = String(s)).length > 80 ? `${s.slice(0, 77)}...` : s
-const strip = t => t.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f\xad\u061c\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]/g, '')
+const strip = t => t.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f\xad\u061c\u180e\u200b-\u200f\u2028-\u202e\u2060-\u2064\u2066-\u2069\u3164\ufe00-\ufe0f\ufeff\u{e0000}-\u{e007f}]/gu, '')
 // A regular file under 1 MB, read as text; null for anything else (a symlink, a directory, a device, a big file).
 // True when no part of p below root is a symlink or junction (so a read never follows a link a repository planted).
 const plain = (root, p) => {
@@ -238,7 +239,7 @@ export function audit(cwd, dir = claudeDir()) {
     `CLAUDE.md: ${md.length} file(s), about ${tok(mdTotal)} tokens`, ...md.map(m => `  ${m.file} (${m.chars} chars)`),
     `Skills: ${skills.length}, descriptions about ${tok(sum(skills))} tokens. Longest:`, longest(skills),
     `Agents: ${agents.length}, descriptions about ${tok(sum(agents))} tokens. Longest:`, longest(agents),
-    `MCP servers on disk: ${mcp.length}`, ...mcp.map(m => `  ${cap(m.name)} [${m.src}] ${cap(m.sig)}`),
+    `MCP servers on disk: ${mcp.length}`, ...mcp.map(m => `  ${cap(m.name)} [${cap(m.src)}] ${cap(m.sig)}`),
     '  Tool counts need a live connection. Run /context to see them. Account-level connectors (for example Notion from claude.ai) are not on disk and are not listed.',
     '',
     'Suggestions (each is a change for you to approve and make):',
@@ -649,13 +650,13 @@ const NO_HOOKS = join(dirname(fileURLToPath(import.meta.url)), 'no-hooks')
 // What the uncommitted changes would cost to read. Plain git commands with lazy fetch (a partial clone's
 // configured remote command), repository hooks, fsmonitor, external diff, text conversion and submodules turned off.
 export function gitContext(cwd) {
-  const git = args => execFileSync('git', ['--no-lazy-fetch', '--no-optional-locks', '-c', `core.hooksPath=${NO_HOOKS}`, '-c', 'core.fsmonitor=false', '-c', 'core.untrackedCache=false', ...args], { cwd, encoding: 'utf8', timeout: 20_000, maxBuffer: 20e6, stdio: ['ignore', 'pipe', 'ignore'] })
+  const git = args => execFileSync('git', ['--no-lazy-fetch', '--no-optional-locks', '-c', `core.hooksPath=${NO_HOOKS}`, '-c', 'core.fsmonitor=false', '-c', 'core.untrackedCache=false', '-c', 'core.quotePath=false', ...args], { cwd, encoding: 'utf8', timeout: 20_000, maxBuffer: 20e6, stdio: ['ignore', 'pipe', 'ignore'] })
   // A filter in the repository's own config (local or worktree) runs a command on `git status`, and core.worktree
   // points git at another folder, so none of it runs then.
   let risky = ''
   try { risky = git(['config', '--show-scope', '--includes', '--get-regexp', '^(filter\\.|core\\.worktree$)']) } catch (err) {
-    // Exit 1 means none is set. Any other failure (git older than 2.45 has no --no-lazy-fetch) proves nothing.
-    if (err.status !== 1) return 'Not run: git could not check this repository config (git missing, or older than 2.45, which has no --no-lazy-fetch).'
+    // Exit 1 means none is set. Any other failure (a broken config, git older than 2.45) proves nothing.
+    if (err.status !== 1) return 'Not run: git could not check this repository config (for example, git is missing, the config is broken, or git is older than 2.45, which has no --no-lazy-fetch).'
   }
   if (risky.split('\n').some(l => /^(local|worktree)\s/.test(l))) return 'Not run: this repository config sets git filter commands or core.worktree.'
   let status
@@ -667,10 +668,15 @@ export function gitContext(cwd) {
   try { root = git(['rev-parse', '--show-toplevel']).trim() || cwd } catch { /* keep cwd */ }
   let diff = null
   try { diff = git(['diff', 'HEAD', '--no-ext-diff', '--no-textconv', '--no-color', '--ignore-submodules=all']).length } catch { /* no HEAD yet, or a blob a partial clone does not have */ }
-  const sized = rows.map(r => { let s = 0; try { const st = lstatSync(join(root, r.file)); s = st.isFile() ? st.size : 0 } catch { /* deleted */ } return { ...r, s } }).sort((a, b) => b.s - a.s)
+  // A path that leaves the root or passes a link (a crafted index, a junction) counts as 0.
+  const sized = rows.map(r => { let s = 0; const f = join(root, r.file); try { const st = plain(root, f) && lstatSync(f); s = st && st.isFile() ? st.size : 0 } catch { /* deleted */ } return { ...r, s } }).sort((a, b) => b.s - a.s)
   const whole = sized.reduce((a, r) => a + r.s, 0)
-  const tip = diff === null ? 'Tip: git diff did not run, so its size is unknown.'
-    : whole > 2 * diff && diff ? 'Tip: ask Claude to read `git diff` rather than the whole files when reviewing these changes.' : 'Tip: the files are small; reading them whole is fine.'
+  // `git diff HEAD` leaves out new files git does not track yet; reading one costs its whole size.
+  if (diff !== null) diff += sized.filter(r => r.code === '??').reduce((a, r) => a + r.s, 0)
+  const tip = diff === null ? 'Tip: git diff failed, so its size is unknown.'
+    : whole > 2 * diff && diff ? 'Tip: ask Claude to read `git diff` rather than the whole files when reviewing these changes.'
+    : tok(whole) < 2000 ? 'Tip: the files are small; reading them whole is fine.'
+    : 'Tip: the diff is not much smaller than the files, so reading the diff saves little.'
   return [`${rows.length} changed file(s). Reading them whole: about ${n(tok(whole))} tokens. The diff alone: ${diff === null ? 'unknown' : `about ${n(tok(diff))} tokens`}.`, '',
     ...sized.slice(0, 15).map(r => `  ${r.code} ${n(tok(r.s)).padStart(7)}  ${cap(r.file)}`),
     ...(rows.length > 15 ? [`  ... and ${rows.length - 15} more`] : []), '',
