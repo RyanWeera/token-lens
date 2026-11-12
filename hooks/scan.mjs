@@ -14,11 +14,12 @@ import { fileURLToPath } from 'node:url'
 // repository ships could run in place of the real git.
 if (process.platform === 'win32') process.env.NoDefaultCurrentDirectoryInExePath = '1'
 
-// Names come from files a repository controls: no control, escape, format or other invisible character (tag
-// characters and variation selectors can hide text) reaches the terminal or the model. Tab and newline stay.
+// Names come from files a repository controls. strip removes control and format characters, lone surrogate
+// halves (two halves could join into a hidden character), line and paragraph separators and default ignorable
+// code points (tag characters, variation selectors), so they cannot hide text. Tab and newline stay.
 // A name taken from a repository or config file is printed at most 80 characters long.
 const cap = s => (s = String(s)).length > 80 ? `${s.slice(0, 77)}...` : s
-const strip = t => t.replace(/(?![\t\n])[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]/gu, '')
+const strip = t => t.replace(/(?![\t\n])[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]/gu, '')
 // A regular file under 1 MB, read as text; null for anything else (a symlink, a directory, a device, a big file).
 // True when no part of p below root is a symlink or junction (so a read never follows a link a repository planted).
 const plain = (root, p) => {
@@ -667,21 +668,21 @@ export function gitContext(cwd) {
   let root = cwd
   try { root = git(['rev-parse', '--show-toplevel']).trim() || cwd } catch { /* keep cwd */ }
   let diff = null
-  try { diff = git(['diff', 'HEAD', '--no-ext-diff', '--no-textconv', '--no-color', '--ignore-submodules=all']).length } catch { /* no HEAD yet, or a blob a partial clone does not have */ }
+  try { diff = Buffer.byteLength(git(['diff', 'HEAD', '--no-ext-diff', '--no-textconv', '--no-color', '--ignore-submodules=all'])) } catch { /* no HEAD yet, or a blob a partial clone does not have */ }
   // A path that leaves the root or passes a link (a crafted index, a junction) counts as 0.
   const sized = rows.map(r => { let s = 0; const f = join(root, r.file); try { const st = plain(root, f) && lstatSync(f); s = st && st.isFile() ? st.size : 0 } catch { /* deleted */ } return { ...r, s } }).sort((a, b) => b.s - a.s)
   const whole = sized.reduce((a, r) => a + r.s, 0)
   // `git diff HEAD` leaves out new files git does not track yet; reading one costs its whole size.
   if (diff !== null) diff += sized.filter(r => r.code === '??').reduce((a, r) => a + r.s, 0)
+  // A tip only in the clear cases; the two figures speak for themselves otherwise.
   const tip = diff === null ? 'Tip: git diff failed, so its size is unknown.'
     : whole > 2 * diff && diff ? 'Tip: ask Claude to read `git diff` rather than the whole files when reviewing these changes.'
-    : tok(whole) < 2000 ? 'Tip: the files are small; reading them whole is fine.'
-    : diff >= whole ? 'Tip: the diff is as big as the files or bigger, so read the files whole.'
-    : 'Tip: the diff is not much smaller than the files, so reading the diff saves little.'
+    : tok(whole) < 2000 ? 'Tip: the changed files are small, so reading them whole costs little.'
+    : ''
   return [`${rows.length} changed file(s). Reading them whole: about ${n(tok(whole))} tokens. The diff, with new files in full: ${diff === null ? 'unknown' : `about ${n(tok(diff))} tokens`}.`, '',
     ...sized.slice(0, 15).map(r => `  ${r.code} ${n(tok(r.s)).padStart(7)}  ${cap(r.file)}`),
-    ...(rows.length > 15 ? [`  ... and ${rows.length - 15} more`] : []), '',
-    tip].map(strip).join('\n')
+    ...(rows.length > 15 ? [`  ... and ${rows.length - 15} more`] : []),
+    ...(tip ? ['', tip] : [])].map(strip).join('\n')
 }
 
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c])

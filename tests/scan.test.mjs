@@ -122,11 +122,15 @@ test('the audit survives a CLAUDE.md that is a directory, skips symlinks and net
   mkdirSync(join(cwd, 'CLAUDE.md'))
   mkdirSync(join(cwd, '.claude', 'skills', 'bad\u202ename'), { recursive: true })
   writeFileSync(join(cwd, '.claude', 'skills', 'bad\u202ename', 'SKILL.md'), '---\nname: x\ndescription: d\n---\n')
-  writeFileSync(join(cwd, '.mcp.json'), JSON.stringify({ mcpServers: { ['evil\u001b[2Jname\u{e0041}\ufe0f\u{e0150}\u206a']: { url: 'https://h.example/x' } } }))
+  // The second name nests lone surrogate halves around a removed character, so they would join into a tag character.
+  writeFileSync(join(cwd, '.mcp.json'), JSON.stringify({ mcpServers: {
+    ['evil\u001b[2Jname\u{e0041}\ufe0f\u{e0150}\u206a']: { url: 'https://h.example/x' },
+    ['docs\udb40\udb40\u200b\udc01\udc52']: { url: 'https://h.example/y' } } }))
   const out = audit(cwd, dir)
   assert.match(out, /Setup audit/)
   assert.match(out, /evil\[2Jname \[\.mcp\.json\]/)
-  assert.doesNotMatch(out, /[\u001b\u202e\u206a\ufe0f\u{e0041}\u{e0150}]/u)
+  assert.match(out, /docs \[\.mcp\.json\]/)
+  assert.doesNotMatch(out, /[\u001b\u202e\u206a\ufe0f\u{e0000}-\u{e0fff}\p{Cs}]/u)
 })
 
 test('a plugin id with control characters is ignored', () => {
@@ -188,12 +192,12 @@ test('git runs no repository hook, and does not run when the repository sets fil
   try { assert.match(gitContext(d), /^Not run: git could not check/) } finally { process.env.PATH = path }
 })
 
-test('a big untracked file with a non-ASCII name keeps its size and gets the right tip', () => {
+test('a big untracked file with a non-ASCII name keeps its size, and a tip shows only in a clear case', () => {
   const d = mkdtempSync(join(tmpdir(), 'tl-new-'))
-  const git = (...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'core.hooksPath=.git/hooks', '-c', 'commit.gpgSign=false', ...a], { cwd: d, stdio: ['ignore', 'pipe', 'ignore'] })
+  const git = (...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'core.hooksPath=.git/hooks', '-c', 'commit.gpgSign=false', '-c', 'core.autocrlf=false', ...a], { cwd: d, stdio: ['ignore', 'pipe', 'ignore'] })
   git('init', '-q')
-  writeFileSync(join(d, 'a.txt'), 'one')
-  git('add', 'a.txt')
+  writeFileSync(join(d, 'big.txt'), 'line\n'.repeat(8_000))
+  git('add', 'big.txt')
   git('commit', '-qm', 'one')
   writeFileSync(join(d, 'café.txt'), 'x'.repeat(40_000))
   // A name that starts with two dots is still inside the repository.
@@ -202,7 +206,21 @@ test('a big untracked file with a non-ASCII name keeps its size and gets the rig
   assert.match(out, /^2 changed file\(s\)\. Reading them whole: about 11\.0k tokens\. The diff, with new files in full: about 11\.0k tokens\./)
   assert.match(out, /10\.0k {2}café\.txt/)
   assert.match(out, /1\.0k {2}\.\.notes\.txt/)
-  assert.match(out, /as big as the files or bigger, so read the files whole/)
+  assert.doesNotMatch(out, /Tip:/) // the diff costs the same as the files, so no advice
+  git('add', '-A')
+  git('commit', '-qm', 'two')
+  writeFileSync(join(d, 'big.txt'), 'line\n'.repeat(8_000) + 'new\n')
+  assert.match(gitContext(d), /^1 changed file.*Tip: ask Claude to read `git diff`/s)
+})
+
+test('a CLAUDE.md import outside its folder is not counted, and a name that starts with two dots is', () => {
+  const up = mkdtempSync(join(tmpdir(), 'tl-up-'))
+  const cwd = join(up, 'proj')
+  mkdirSync(cwd)
+  writeFileSync(join(up, 'secret.md'), 's'.repeat(1_000))
+  writeFileSync(join(cwd, '..notes.md'), 'n'.repeat(500))
+  writeFileSync(join(cwd, 'CLAUDE.md'), '@../secret.md\n@..notes.md\n')
+  assert.match(audit(cwd, mkdtempSync(join(tmpdir(), 'tl-'))), /CLAUDE\.md \(526 chars\)/)
 })
 
 test('a partial clone with a missing blob runs no remote command from the repository config', () => {
