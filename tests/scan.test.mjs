@@ -169,7 +169,7 @@ test('git runs no repository hook, and does not run when the repository sets fil
   // A new file time with the same content makes a plain `git status` rewrite the index, which runs the hook.
   utimesSync(join(d, 'a.txt'), new Date('2030-01-01'), new Date('2030-01-01'))
   // b.txt is untracked, so `git diff HEAD` leaves it out; its whole size still counts toward the diff.
-  assert.match(gitContext(d), /^1 changed file\(s\)\. Reading them whole: about 100 tokens\. The diff, with new files in full: about 100 tokens\./)
+  assert.match(gitContext(d), /^1 changed file\(s\)\. Reading them whole: about 100 tokens\. The diff, with new files in full: about 100 tokens\..*Tip: the changed files are small/s)
   assert.equal(existsSync(join(d, '.git', 'hooked')), false)
   // From a subfolder the sizes still come from the repository root.
   mkdirSync(join(d, 'sub'))
@@ -210,7 +210,34 @@ test('a big untracked file with a non-ASCII name keeps its size, and a tip shows
   git('add', '-A')
   git('commit', '-qm', 'two')
   writeFileSync(join(d, 'big.txt'), 'line\n'.repeat(8_000) + 'new\n')
-  assert.match(gitContext(d), /^1 changed file.*Tip: ask Claude to read `git diff`/s)
+  assert.match(gitContext(d), /^1 changed file.*Tip: ask Claude to read `git diff` rather/s)
+  // `git diff` leaves out a new file, so the tip names it.
+  writeFileSync(join(d, 'n.txt'), 'n')
+  assert.match(gitContext(d), /Tip: ask Claude to read `git diff` plus the new files rather/)
+})
+
+test('/tokens git counts raw diff bytes and gives no tip for a deleted or binary file', () => {
+  const d = mkdtempSync(join(tmpdir(), 'tl-tip-'))
+  const git = (...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'core.hooksPath=.git/hooks', '-c', 'commit.gpgSign=false', '-c', 'core.autocrlf=false', ...a], { cwd: d, stdio: ['ignore', 'pipe', 'ignore'] })
+  git('init', '-q')
+  writeFileSync(join(d, 'big.txt'), 'line\n'.repeat(8_000))
+  writeFileSync(join(d, 'bin.dat'), Buffer.alloc(40_000))
+  writeFileSync(join(d, 'l1.txt'), '')
+  git('add', '-A')
+  git('commit', '-qm', 'one')
+  // A deleted file reads as 0, but its diff holds every removed line: the files are not "small".
+  rmSync(join(d, 'big.txt'))
+  const gone = gitContext(d)
+  assert.match(gone, /^1 changed file\(s\)\. Reading them whole: about 0 tokens\. The diff, with new files in full: about 12\.0k tokens\./)
+  assert.doesNotMatch(gone, /Tip:/)
+  git('checkout', '--', 'big.txt')
+  // git prints one line for a binary change, so reading the diff would not show it.
+  writeFileSync(join(d, 'bin.dat'), Buffer.alloc(40_000, 1))
+  assert.doesNotMatch(gitContext(d), /Tip:/)
+  git('checkout', '--', 'bin.dat')
+  // Bytes that are not UTF-8 count once each, not as 3-byte replacement characters.
+  writeFileSync(join(d, 'l1.txt'), Buffer.alloc(8_000, 0xe9))
+  assert.match(gitContext(d), /The diff, with new files in full: about 2\.0k tokens\./)
 })
 
 test('a CLAUDE.md import outside its folder is not counted, and a name that starts with two dots is', () => {
@@ -238,7 +265,7 @@ test('a partial clone with a missing blob runs no remote command from the reposi
   git('config', 'remote.origin.promisor', 'true')
   git('config', 'remote.origin.url', d)
   git('config', 'remote.origin.uploadpack', `touch '${marker}';`)
-  assert.match(gitContext(d), /^1 changed file.*The diff, with new files in full: unknown/)
+  assert.match(gitContext(d), /^1 changed file.*The diff, with new files in full: unknown\..*Tip: git diff failed/s)
   assert.equal(existsSync(marker), false)
   try { git('diff', 'HEAD') } catch { /* the fetch fails after the command ran */ }
   assert.equal(existsSync(marker), true) // plain git does run it, so the check above means something

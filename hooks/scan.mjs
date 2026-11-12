@@ -651,7 +651,7 @@ const NO_HOOKS = join(dirname(fileURLToPath(import.meta.url)), 'no-hooks')
 // What the uncommitted changes would cost to read. Plain git commands with lazy fetch (a partial clone's
 // configured remote command), repository hooks, fsmonitor, external diff, text conversion and submodules turned off.
 export function gitContext(cwd) {
-  const git = args => execFileSync('git', ['--no-lazy-fetch', '--no-optional-locks', '-c', `core.hooksPath=${NO_HOOKS}`, '-c', 'core.fsmonitor=false', '-c', 'core.untrackedCache=false', '-c', 'core.quotePath=false', ...args], { cwd, encoding: 'utf8', timeout: 20_000, maxBuffer: 20e6, stdio: ['ignore', 'pipe', 'ignore'] })
+  const git = (args, encoding = 'utf8') => execFileSync('git', ['--no-lazy-fetch', '--no-optional-locks', '-c', `core.hooksPath=${NO_HOOKS}`, '-c', 'core.fsmonitor=false', '-c', 'core.untrackedCache=false', '-c', 'core.quotePath=false', ...args], { cwd, encoding, timeout: 20_000, maxBuffer: 20e6, stdio: ['ignore', 'pipe', 'ignore'] })
   // A filter in the repository's own config (local or worktree) runs a command on `git status`, and core.worktree
   // points git at another folder, so none of it runs then.
   let risky = ''
@@ -667,17 +667,25 @@ export function gitContext(cwd) {
   // Status paths are relative to the repository root, which can sit above the session folder.
   let root = cwd
   try { root = git(['rev-parse', '--show-toplevel']).trim() || cwd } catch { /* keep cwd */ }
-  let diff = null
-  try { diff = Buffer.byteLength(git(['diff', 'HEAD', '--no-ext-diff', '--no-textconv', '--no-color', '--ignore-submodules=all'])) } catch { /* no HEAD yet, or a blob a partial clone does not have */ }
+  let diff = null, binary = false
+  try {
+    // Raw bytes, so a file that is not UTF-8 counts what git prints.
+    const out = git(['diff', 'HEAD', '--no-ext-diff', '--no-textconv', '--no-color', '--ignore-submodules=all'], 'buffer')
+    diff = out.length
+    // git prints one line for a binary change, so the diff does not show it.
+    binary = /^Binary files .* differ$/m.test(out.toString('latin1'))
+  } catch { /* no HEAD yet, or a blob a partial clone does not have */ }
   // A path that leaves the root or passes a link (a crafted index, a junction) counts as 0.
   const sized = rows.map(r => { let s = 0; const f = join(root, r.file); try { const st = plain(root, f) && lstatSync(f); s = st && st.isFile() ? st.size : 0 } catch { /* deleted */ } return { ...r, s } }).sort((a, b) => b.s - a.s)
   const whole = sized.reduce((a, r) => a + r.s, 0)
   // `git diff HEAD` leaves out new files git does not track yet; reading one costs its whole size.
-  if (diff !== null) diff += sized.filter(r => r.code === '??').reduce((a, r) => a + r.s, 0)
-  // A tip only in the clear cases; the two figures speak for themselves otherwise.
+  const untracked = sized.filter(r => r.code === '??')
+  if (diff !== null) diff += untracked.reduce((a, r) => a + r.s, 0)
+  // A tip only in the clear cases; the two figures speak for themselves otherwise. A diff larger than the files
+  // holds removed lines (a deleted file reads as 0), which the whole files do not show.
   const tip = diff === null ? 'Tip: git diff failed, so its size is unknown.'
-    : whole > 2 * diff && diff ? 'Tip: ask Claude to read `git diff` rather than the whole files when reviewing these changes.'
-    : tok(whole) < 2000 ? 'Tip: the changed files are small, so reading them whole costs little.'
+    : whole > 2 * diff && diff && !binary ? `Tip: ask Claude to read \`git diff\`${untracked.length ? ' plus the new files' : ''} rather than the whole files when reviewing these changes.`
+    : tok(whole) < 2000 && diff <= whole ? 'Tip: the changed files are small, so reading them whole costs little.'
     : ''
   return [`${rows.length} changed file(s). Reading them whole: about ${n(tok(whole))} tokens. The diff, with new files in full: ${diff === null ? 'unknown' : `about ${n(tok(diff))} tokens`}.`, '',
     ...sized.slice(0, 15).map(r => `  ${r.code} ${n(tok(r.s)).padStart(7)}  ${cap(r.file)}`),
