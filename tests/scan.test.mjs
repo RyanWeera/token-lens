@@ -165,17 +165,20 @@ test('git runs no repository hook, and does not run when the repository sets fil
   utimesSync(join(d, 'a.txt'), new Date('2030-01-01'), new Date('2030-01-01'))
   assert.match(gitContext(d), /^1 changed file/)
   assert.equal(existsSync(join(d, '.git', 'hooked')), false)
+  // From a subfolder the sizes still come from the repository root.
+  mkdirSync(join(d, 'sub'))
+  assert.equal(gitContext(join(d, 'sub')), gitContext(d))
   git('status', '--porcelain') // plain git does run it, so the check above means something
   assert.equal(existsSync(join(d, '.git', 'hooked')), true)
   git('config', 'extensions.worktreeConfig', 'true')
   git('config', '--worktree', 'filter.y.clean', 'cat')
-  assert.match(gitContext(d), /^Not run/)
+  assert.match(gitContext(d), /^Not run: this repository config sets/)
   git('config', '--worktree', '--unset', 'filter.y.clean')
   git('config', 'filter.x.clean', 'cat')
-  assert.match(gitContext(d), /^Not run/)
+  assert.match(gitContext(d), /^Not run: this repository config sets/)
   git('config', '--unset', 'filter.x.clean')
   git('config', 'core.worktree', tmpdir())
-  assert.match(gitContext(d), /^Not run/)
+  assert.match(gitContext(d), /^Not run: this repository config sets/)
   git('config', '--unset', 'core.worktree')
   // A filter check that fails for any reason but "none set" (here: no git found) runs nothing.
   const path = process.env.PATH
@@ -198,7 +201,7 @@ test('a partial clone with a missing blob runs no remote command from the reposi
   git('config', 'remote.origin.promisor', 'true')
   git('config', 'remote.origin.url', d)
   git('config', 'remote.origin.uploadpack', `touch '${marker}';`)
-  assert.match(gitContext(d), /^1 changed file/)
+  assert.match(gitContext(d), /^1 changed file.*The diff alone: unknown/)
   assert.equal(existsSync(marker), false)
   try { git('diff', 'HEAD') } catch { /* the fetch fails after the command ran */ }
   assert.equal(existsSync(marker), true) // plain git does run it, so the check above means something

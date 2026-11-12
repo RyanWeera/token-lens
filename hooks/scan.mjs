@@ -223,11 +223,11 @@ export function audit(cwd, dir = claudeDir()) {
   const names = new Map()
   for (const s of skills) names.set(s.name, (names.get(s.name) || 0) + 1)
   const dupSkills = [...names].filter(([, c]) => c > 1).map(([k]) => k)
-  if (dupSkills.length) tips.push(`Skills defined more than once: ${dupSkills.slice(0, 8).join(', ')}. Keep one copy.`)
+  if (dupSkills.length) tips.push(`Skills defined more than once: ${dupSkills.slice(0, 8).map(cap).join(', ')}. Keep one copy.`)
   if (sum(skills) + sum(agents) > 30_000) tips.push(`Skill and agent descriptions total about ${tok(sum(skills) + sum(agents))} tokens. Shorten the longest ones or disable plugins you do not use.`)
   const groups = new Map()
   for (const m of mcp) groups.set(norm(m.name) || m.name, [...(groups.get(norm(m.name) || m.name) || []), m])
-  for (const [, g] of groups) if (g.length > 1) tips.push(`MCP server loaded more than once: ${g.map(m => `${m.name} (${m.src})`).join(' and ')}. Keep one.`)
+  for (const [, g] of groups) if (g.length > 1) tips.push(`MCP server loaded more than once: ${g.map(m => `${cap(m.name)} (${cap(m.src)})`).join(' and ')}. Keep one.`)
   const bySig = new Map()
   for (const m of mcp) bySig.set(m.key, [...(bySig.get(m.key) || []), m])
   for (const [key, g] of bySig) if (g.length > 1 && key.trim() && new Set(g.map(m => norm(m.name))).size > 1) tips.push(`MCP servers share the same target (${cap(g[0].sig)}): ${g.map(m => cap(m.name)).join(', ')}.`)
@@ -655,21 +655,26 @@ export function gitContext(cwd) {
   let risky = ''
   try { risky = git(['config', '--show-scope', '--includes', '--get-regexp', '^(filter\\.|core\\.worktree$)']) } catch (err) {
     // Exit 1 means none is set. Any other failure (git older than 2.45 has no --no-lazy-fetch) proves nothing.
-    if (err.status !== 1) return 'Not run: git could not check this repository config (git missing, or older than 2.45).'
+    if (err.status !== 1) return 'Not run: git could not check this repository config (git missing, or older than 2.45, which has no --no-lazy-fetch).'
   }
   if (risky.split('\n').some(l => /^(local|worktree)\s/.test(l))) return 'Not run: this repository config sets git filter commands or core.worktree.'
   let status
   try { status = git(['status', '--porcelain=v1', '-uall', '--ignore-submodules=all']) } catch { return 'Not a git repository (or git is not installed).' }
   const rows = status.split('\n').filter(Boolean).map(l => ({ code: l.slice(0, 2), file: l.slice(3).replace(/^.* -> /, '').replace(/^"|"$/g, '') }))
   if (!rows.length) return 'No uncommitted changes.'
-  let diff = 0
-  try { diff = git(['diff', 'HEAD', '--no-ext-diff', '--no-textconv', '--no-color', '--ignore-submodules=all']).length } catch { /* no HEAD yet */ }
-  const sized = rows.map(r => { let s = 0; try { const st = lstatSync(join(cwd, r.file)); s = st.isFile() ? st.size : 0 } catch { /* deleted */ } return { ...r, s } }).sort((a, b) => b.s - a.s)
+  // Status paths are relative to the repository root, which can sit above the session folder.
+  let root = cwd
+  try { root = git(['rev-parse', '--show-toplevel']).trim() || cwd } catch { /* keep cwd */ }
+  let diff = null
+  try { diff = git(['diff', 'HEAD', '--no-ext-diff', '--no-textconv', '--no-color', '--ignore-submodules=all']).length } catch { /* no HEAD yet, or a blob a partial clone does not have */ }
+  const sized = rows.map(r => { let s = 0; try { const st = lstatSync(join(root, r.file)); s = st.isFile() ? st.size : 0 } catch { /* deleted */ } return { ...r, s } }).sort((a, b) => b.s - a.s)
   const whole = sized.reduce((a, r) => a + r.s, 0)
-  return [`${rows.length} changed file(s). Reading them whole: about ${n(tok(whole))} tokens. The diff alone: about ${n(tok(diff))} tokens.`, '',
+  const tip = diff === null ? 'Tip: git diff did not run, so its size is unknown.'
+    : whole > 2 * diff && diff ? 'Tip: ask Claude to read `git diff` rather than the whole files when reviewing these changes.' : 'Tip: the files are small; reading them whole is fine.'
+  return [`${rows.length} changed file(s). Reading them whole: about ${n(tok(whole))} tokens. The diff alone: ${diff === null ? 'unknown' : `about ${n(tok(diff))} tokens`}.`, '',
     ...sized.slice(0, 15).map(r => `  ${r.code} ${n(tok(r.s)).padStart(7)}  ${cap(r.file)}`),
     ...(rows.length > 15 ? [`  ... and ${rows.length - 15} more`] : []), '',
-    whole > 2 * diff && diff ? 'Tip: ask Claude to read `git diff` rather than the whole files when reviewing these changes.' : 'Tip: the files are small; reading them whole is fine.'].map(strip).join('\n')
+    tip].map(strip).join('\n')
 }
 
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c])
