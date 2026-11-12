@@ -94,7 +94,7 @@ The mod does not change the system prompt and does not block any tool call other
 
 **Uninstall:** run `/tokens undo` if you want the plugins back, then `/tokens purge`, uninstall the mod, and delete `~/.claude/token-lens/` and `~/.claude/plugins/store/token-lens_*.json`. Note that `purge` also deletes the undo log.
 
-**Files read (read only):** `~/.claude/projects/**/*.jsonl` (transcripts, for the reports and the analysis); `~/.claude/settings.json`, `~/.claude/plugins/installed_plugins.json` and each plugin's folder (for the plan); for the audit, CLAUDE.md files up to the project root, skill and agent files, `~/.claude.json` and `.mcp.json` files; for `/tokens memory`, the project's memory folder; for `/tokens git`, the output of `git config`, `git status`, `git rev-parse --show-toplevel` and `git diff HEAD`, and the size of each changed file under the repository root (git runs with lazy fetch, repository hooks, fsmonitor, external diff, text conversion and submodules turned off, and does not run at all when the repository's own config sets git filter commands or `core.worktree`, or when git cannot check that config, for example when git is missing or older than 2.45, which has no `--no-lazy-fetch`). The audit prints only server names, the host of a URL or the command name, never env values, arguments or tokens.
+**Files read (read only):** `~/.claude/projects/**/*.jsonl` (transcripts, for the reports and the analysis); `~/.claude/settings.json`, `~/.claude/plugins/installed_plugins.json` and each plugin's folder (for the plan); for the audit, CLAUDE.md files up to the project root, skill and agent files, `~/.claude.json` and `.mcp.json` files; for `/tokens memory`, the project's memory folder; for `/tokens git`, the output of `git config`, `git status`, `git rev-parse --show-toplevel` and `git diff HEAD`, and the size of each changed file under the repository root (git runs with lazy fetch, repository hooks, fsmonitor, external diff, text conversion and submodules turned off, and does not run at all when the repository's own config sets git filter commands, hook commands or `core.worktree`, or when git cannot check that config, for example when git is missing or older than 2.45, which has no `--no-lazy-fetch`). git still runs the filter programs set in your global or system git config, such as git-lfs, which stores a copy of each changed LFS file under `.git/lfs/objects`. The audit prints only server names, the host of a URL or the command name, never env values, arguments or tokens.
 
 ## Code that runs
 
@@ -106,7 +106,7 @@ The reports, the audit, the plan, the dashboard and the daily analysis run `node
 2. Config writes are limited to `enabledPlugins` in `settings.json`, backed up, verified, logged and reversible. `cleanupPeriodDays` is never touched. No silent restore of settings.
 3. Everything added to or changed in what the model reads is labelled with what did it and the `/tokens` command that stops it: folded output, repeat-read notes, nudges, compaction instructions and the checkpoint row.
 4. No network calls. The report and the dashboard are plain text and HTML with no scripts, fonts or CDNs.
-5. Only this mod's own code runs, plus `git` and the system file opener named above.
+5. Only this mod's own code runs, plus `git` (with the filter programs in your own git config) and the system file opener named above.
 6. A tool call is never blocked, except the repeat Read above, which says why and how to get the full text.
 
 ## Cost figures

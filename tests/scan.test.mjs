@@ -1,6 +1,6 @@
 // Run: node --test tests
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -169,7 +169,7 @@ test('git runs no repository hook, and does not run when the repository sets fil
   // A new file time with the same content makes a plain `git status` rewrite the index, which runs the hook.
   utimesSync(join(d, 'a.txt'), new Date('2030-01-01'), new Date('2030-01-01'))
   // b.txt is untracked, so `git diff HEAD` leaves it out; its whole size still counts toward the diff.
-  assert.match(gitContext(d), /^1 changed file\(s\)\. Reading them whole: about 100 tokens\. The diff, with new files in full: about 100 tokens\..*Tip: these changes are small/s)
+  assert.match(gitContext(d), /^1 changed file\(s\)\. Reading them whole: about 100 tokens\. The diff, with new files in full: about 100 tokens\.(?![^]*Tip:)/)
   assert.equal(existsSync(join(d, '.git', 'hooked')), false)
   // From a subfolder the sizes still come from the repository root.
   mkdirSync(join(d, 'sub'))
@@ -186,6 +186,11 @@ test('git runs no repository hook, and does not run when the repository sets fil
   git('config', 'core.worktree', tmpdir())
   assert.match(gitContext(d), /^Not run: this repository config sets/)
   git('config', '--unset', 'core.worktree')
+  // A hook set in the repository config runs on `git diff` whatever core.hooksPath says.
+  git('config', 'hook.x.event', 'post-index-change')
+  git('config', 'hook.x.command', 'touch hooked')
+  assert.match(gitContext(d), /^Not run: this repository config sets/)
+  git('config', '--remove-section', 'hook.x')
   // A filter check that fails for any reason but "none set" (here: no git found) runs nothing.
   const path = process.env.PATH
   process.env.PATH = ''
@@ -217,35 +222,25 @@ test('a big untracked file with a non-ASCII name keeps its size, and a tip shows
 })
 
 test('/tokens git counts raw diff bytes and gives no tip for a deleted or binary file', () => {
+  // Every tip is checked by its absence here, so a tip that comes back must earn its place in a test.
   const d = mkdtempSync(join(tmpdir(), 'tl-tip-'))
   const git = (...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'core.hooksPath=.git/hooks', '-c', 'commit.gpgSign=false', '-c', 'core.autocrlf=false', ...a], { cwd: d, stdio: ['ignore', 'pipe', 'ignore'] })
   git('init', '-q')
   writeFileSync(join(d, 'big.txt'), 'line\n'.repeat(8_000))
   writeFileSync(join(d, 'bin.dat'), Buffer.alloc(40_000))
   writeFileSync(join(d, 'l1.txt'), '')
-  writeFileSync(join(d, 'a.txt'), ('a'.repeat(99) + '\n').repeat(50))
-  writeFileSync(join(d, 'b.txt'), 'b\n'.repeat(3_000))
-  writeFileSync(join(d, 'small.bin'), Buffer.alloc(600))
   git('add', '-A')
   git('commit', '-qm', 'one')
-  // A deleted file reads as 0, but its diff holds every removed line: the files are not "small".
+  // A deleted file reads as 0, but its diff holds every removed line.
   rmSync(join(d, 'big.txt'))
   const gone = gitContext(d)
   assert.match(gone, /^1 changed file\(s\)\. Reading them whole: about 0 tokens\. The diff, with new files in full: about 12\.0k tokens\./)
   assert.doesNotMatch(gone, /Tip:/)
   git('checkout', '--', 'big.txt')
-  // The same when the deleted file is smaller than the other change.
-  rmSync(join(d, 'a.txt'))
-  writeFileSync(join(d, 'b.txt'), 'B\n' + 'b\n'.repeat(2_999))
-  assert.match(gitContext(d), /^2 changed file\(s\)\. Reading them whole: about 1\.5k tokens\. The diff, with new files in full: about 1\.\dk tokens\.(?![^]*Tip:)/)
-  git('checkout', '--', 'a.txt', 'b.txt')
-  // git prints one line for a binary change, so reading the diff would not show it; a small one gets no tip either.
+  // git prints one line for a binary change, so reading the diff would not show it.
   writeFileSync(join(d, 'bin.dat'), Buffer.alloc(40_000, 1))
   assert.doesNotMatch(gitContext(d), /Tip:/)
   git('checkout', '--', 'bin.dat')
-  writeFileSync(join(d, 'small.bin'), Buffer.alloc(600, 1))
-  assert.match(gitContext(d), /^1 changed file\(s\)\. Reading them whole: about 150 tokens\.(?![^]*Tip:)/)
-  git('checkout', '--', 'small.bin')
   // Bytes that are not UTF-8 count once each, not as 3-byte replacement characters.
   writeFileSync(join(d, 'l1.txt'), Buffer.alloc(8_000, 0xe9))
   assert.match(gitContext(d), /The diff, with new files in full: about 2\.0k tokens\./)
@@ -263,9 +258,11 @@ test('/tokens git gives no read-diff tip for a Git LFS file, and git-lfs adds no
   git('commit', '-qm', 'one')
   // The diff holds only the pointer lines, so it does not show the changed row.
   writeFileSync(join(d, 'data.csv'), 'row,2\n' + 'row,1\n'.repeat(19_999))
+  const hooksDir = new URL('../hooks/', import.meta.url)
+  const before = readdirSync(hooksDir)
   assert.match(gitContext(d), /^1 changed file\(s\)\. Reading them whole: about 30\.0k tokens\.(?![^]*Tip:)/)
-  // git-lfs installs its hooks into core.hooksPath during `git diff`; that path must stay empty.
-  assert.equal(existsSync(new URL('../hooks/no-hooks', import.meta.url)), false)
+  // git-lfs installs its hooks into core.hooksPath during `git diff`; nothing may appear in the mod.
+  assert.deepEqual(readdirSync(hooksDir), before)
 })
 
 test('a CLAUDE.md import outside its folder is not counted, and a name that starts with two dots is', () => {

@@ -653,14 +653,15 @@ const NO_HOOKS = join(fileURLToPath(import.meta.url), 'no-hooks')
 // configured remote command), repository hooks, fsmonitor, external diff, text conversion and submodules turned off.
 export function gitContext(cwd) {
   const git = (args, encoding = 'utf8') => execFileSync('git', ['--no-lazy-fetch', '--no-optional-locks', '-c', `core.hooksPath=${NO_HOOKS}`, '-c', 'core.fsmonitor=false', '-c', 'core.untrackedCache=false', '-c', 'core.quotePath=false', ...args], { cwd, encoding, timeout: 20_000, maxBuffer: 20e6, stdio: ['ignore', 'pipe', 'ignore'] })
-  // A filter in the repository's own config (local or worktree) runs a command on `git status`, and core.worktree
-  // points git at another folder, so none of it runs then.
+  // A filter in the repository's own config (local or worktree) runs a command on `git status`, a hook set there
+  // (hook.<name>.command, which core.hooksPath does not stop) runs on `git diff`, and core.worktree points git at
+  // another folder, so none of it runs then.
   let risky = ''
-  try { risky = git(['config', '--show-scope', '--includes', '--get-regexp', '^(filter\\.|core\\.worktree$)']) } catch (err) {
+  try { risky = git(['config', '--show-scope', '--includes', '--get-regexp', '^(filter\\.|hook\\.|core\\.worktree$)']) } catch (err) {
     // Exit 1 means none is set. Any other failure (a broken config, git older than 2.45) proves nothing.
     if (err.status !== 1) return 'Not run: git could not check this repository config (for example, git is missing, the config is broken, or git is older than 2.45, which has no --no-lazy-fetch).'
   }
-  if (risky.split('\n').some(l => /^(local|worktree)\s/.test(l))) return 'Not run: this repository config sets git filter commands or core.worktree.'
+  if (risky.split('\n').some(l => /^(local|worktree)\s/.test(l))) return 'Not run: this repository config sets git filter commands, hook commands or core.worktree.'
   let status
   try { status = git(['status', '--porcelain=v1', '-uall', '--ignore-submodules=all']) } catch { return 'Not a git repository (or git is not installed).' }
   const rows = status.split('\n').filter(Boolean).map(l => ({ code: l.slice(0, 2), file: l.slice(3).replace(/^.* -> /, '').replace(/^"|"$/g, '') }))
@@ -682,11 +683,9 @@ export function gitContext(cwd) {
   // `git diff HEAD` leaves out new files git does not track yet; reading one costs its whole size.
   const untracked = sized.filter(r => r.code === '??')
   if (diff !== null) diff += untracked.reduce((a, r) => a + r.s, 0)
-  // A tip only in the clear cases; the two figures speak for themselves otherwise. The last tip claims only that both
-  // cost little, so a deletion the whole files miss does not make it wrong. Bytes / 4 is not what a binary file costs.
+  // A tip only in the clear cases; the two figures speak for themselves otherwise.
   const tip = diff === null ? 'Tip: git diff failed, so its size is unknown.'
     : whole > 2 * diff && diff && !binary ? `Tip: ask Claude to read \`git diff\`${untracked.length ? ' plus the new files' : ''} rather than the whole files when reviewing these changes.`
-    : tok(whole + diff) < 1000 && !binary ? 'Tip: these changes are small, so reading the files or the diff costs little.'
     : ''
   return [`${rows.length} changed file(s). Reading them whole: about ${n(tok(whole))} tokens. The diff, with new files in full: ${diff === null ? 'unknown' : `about ${n(tok(diff))} tokens`}.`, '',
     ...sized.slice(0, 15).map(r => `  ${r.code} ${n(tok(r.s)).padStart(7)}  ${cap(r.file)}`),
