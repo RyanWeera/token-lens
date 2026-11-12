@@ -82,6 +82,27 @@ test('after a compaction the summarizer is told what to keep and the checkpoint 
   expect(JSON.stringify(session.appended())).toContain('added automatically after compaction')
 })
 
+test('a compaction writes the quality file again, so the crab band shows the new checkpoint time', async ($, on) => {
+  mock.store(on)
+  mock.clock(on, { now: 7_000_000 })
+  mock.env(on, { CLAUDE_CONFIG_DIR: '/c' })
+  mock.session(on)
+  boot(on)
+  on('session.usage', () => ({ value: { startedAt: 1_000_000, context: { window: 200_000, percent: 9 }, rateLimits: [] } }))
+  on('session.messages', () => ({ value: [] as never }))
+  on('ui.log', () => ({ value: undefined }))
+  on('ui.toast', () => ({ value: undefined }))
+  const files: Record<string, string> = {}
+  on('fs.write', (_, e) => { const x = e as unknown as { path: string; text: string }; files[x.path] = x.text; return { value: undefined } })
+  on('session.compact', { trigger: 'manual' }, (_, e) => ({ messages: e.messages }) as never)
+  await $.session.start({ cwd: '/p', surface: 'terminal', isInteractive: true } as never)
+  await $.session.compact({ trigger: 'manual', messages: [{ role: 'user', text: 'ship it', toolUses: [], toolResults: [] }] } as never)
+  const path = Object.keys(files).find(f => /[\\/]c[\\/]token-lens[\\/]quality-abcd1234ef\.json$/.test(f))
+  const q = JSON.parse(path ? files[path] : '{}')
+  expect(q.last_checkpoint_epoch).toBe(7000)
+  expect(q.compactions).toBe(1)
+})
+
 test('/tokens auto run turns off an unused plugin after a backup, and /tokens undo turns it back on', async ($, on) => {
   mock.store(on)
   mock.clock(on, { now: 9_000_000_000 })

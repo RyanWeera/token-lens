@@ -153,7 +153,8 @@ const session = (over = {}) => ({ sid: 's1', label: 'p', start: 0, end: 0, turns
 
 test('git runs no repository hook, and does not run when the repository sets filter commands', () => {
   const d = mkdtempSync(join(tmpdir(), 'tl-git-'))
-  const git = (...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { cwd: d })
+  // Pinned so a global core.hooksPath or commit.gpgSign does not change the test.
+  const git = (...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'core.hooksPath=.git/hooks', '-c', 'commit.gpgSign=false', ...a], { cwd: d })
   git('init', '-q')
   writeFileSync(join(d, 'a.txt'), 'x')
   git('add', 'a.txt')
@@ -172,6 +173,11 @@ test('git runs no repository hook, and does not run when the repository sets fil
   git('config', '--worktree', '--unset', 'filter.y.clean')
   git('config', 'filter.x.clean', 'cat')
   assert.match(gitContext(d), /^Not run/)
+  git('config', '--unset', 'filter.x.clean')
+  // A filter check that fails for any reason but "none set" (here: no git found) runs nothing.
+  const path = process.env.PATH
+  process.env.PATH = ''
+  try { assert.match(gitContext(d), /^Not run: git could not check/) } finally { process.env.PATH = path }
 })
 
 test('findings rank binary reads first and report retry churn and cascades', () => {

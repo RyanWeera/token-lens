@@ -325,7 +325,8 @@ export const register: Register = on => {
   })
 
   // The checkpoint is saved first. Unless the person gave instructions, the summarizer is told what this session needs kept.
-  // After the compaction the checkpoint is added back as a labelled row. Never skips or blocks a compaction.
+  // After the compaction the checkpoint is added back as a labelled row and the quality file is written again.
+  // Never skips or blocks a compaction.
   on('session.compact', { trigger: /^(manual|auto|plugin)$/ }, async ($, e, next) => {
     const st = ((await $.store.get('auto')) as Auto | undefined) ?? {}
     const sid = await $.session.id()
@@ -350,6 +351,8 @@ export const register: Register = on => {
         await $.session.append({ message: { type: 'user', content: [{ type: 'text', text: `[token-lens, added automatically after compaction; /tokens auto off stops this]\n${formatCheckpoint({ ...cp, reads: [], errors: [] })}` }] } })
         $.ui.log('token-lens: checkpoint added back to the conversation after compaction.')
       }
+      // The crab band reads the quality file right after a compaction, so it gets the new checkpoint time now.
+      if (!e.agentId) await afterTurn($, 'compaction')
     } catch (err) {
       $.ui.log(`token-lens: after the compaction: ${String(err).slice(0, 160)}`)
     }

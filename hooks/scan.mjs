@@ -650,7 +650,10 @@ export function gitContext(cwd) {
   const git = args => execFileSync('git', ['--no-optional-locks', '-c', `core.hooksPath=${NO_HOOKS}`, '-c', 'core.fsmonitor=false', '-c', 'core.untrackedCache=false', ...args], { cwd, encoding: 'utf8', timeout: 20_000, maxBuffer: 20e6, stdio: ['ignore', 'pipe', 'ignore'] })
   // A filter set in the repository's own config (local or worktree) runs a command on `git status`, so none of it runs then.
   let filters = ''
-  try { filters = git(['config', '--show-scope', '--includes', '--get-regexp', '^filter\\.']) } catch { /* none set */ }
+  try { filters = git(['config', '--show-scope', '--includes', '--get-regexp', '^filter\\.']) } catch (err) {
+    // Exit 1 means none is set. Any other failure (git older than 2.26 has no --show-scope) proves nothing.
+    if (err.status !== 1) return 'Not run: git could not check this repository for filter commands (git missing, or older than 2.26).'
+  }
   if (filters.split('\n').some(l => /^(local|worktree)\s/.test(l))) return 'Not run: this repository sets its own git filter commands, which git status would run.'
   let status
   try { status = git(['status', '--porcelain=v1', '-uall', '--ignore-submodules=all']) } catch { return 'Not a git repository (or git is not installed).' }

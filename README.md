@@ -63,7 +63,7 @@ It never edits CLAUDE.md, never touches `cleanupPeriodDays` or any other setting
 | Hook | Matcher | What it does |
 |---|---|---|
 | `session.start` | none | Registers `/tokens` and the `expand` tool. Deletes expired checkpoints, archives and session records. Sets one timer (5 seconds, once) for the daily clean-up and analysis. |
-| `session.compact` | trigger `manual`, `auto` or `plugin` | Saves a checkpoint, adds summarizer instructions when you gave none, runs the compaction, then adds the checkpoint back. Never skips or blocks a compaction; a failing hook is passed through. |
+| `session.compact` | trigger `manual`, `auto` or `plugin` | Saves a checkpoint, adds summarizer instructions when you gave none, runs the compaction, then adds the checkpoint back and rewrites the quality file. Never skips or blocks a compaction; a failing hook is passed through. |
 | `turn.complete` | none | After an answer of the main conversation: grade, a checkpoint when one is due, the quality file. |
 | `agent.spawn` | none | A checkpoint before a subagent starts. Never holds or changes the spawn. |
 | `session.end` | none | A last checkpoint when the session did work since the last one. |
@@ -78,7 +78,7 @@ The mod does not change the system prompt and does not block any tool call other
 ## Files and data
 
 **Files the mod writes**, all inside `~/.claude/` (or `CLAUDE_CONFIG_DIR`):
-- `token-lens/quality-<session>.json`: the session's grade, score parts, context fill, compactions, checkpoint time and tokens saved. Rewritten after each answer, deleted after 14 days.
+- `token-lens/quality-<session>.json`: the session's grade, score parts, context fill, compactions, checkpoint time and tokens saved. Rewritten after each answer and after each compaction, deleted after 14 days.
 - `token-lens/dashboard.html`: only when you run `/tokens dashboard`.
 - `settings.json`: only the `enabledPlugins` flags described above, when automatic tuning applies a plan or you run `/tokens undo`.
 
@@ -94,7 +94,7 @@ The mod does not change the system prompt and does not block any tool call other
 
 **Uninstall:** run `/tokens undo` if you want the plugins back, then `/tokens purge`, uninstall the mod, and delete `~/.claude/token-lens/` and `~/.claude/plugins/store/token-lens_*.json`. Note that `purge` also deletes the undo log.
 
-**Files read (read only):** `~/.claude/projects/**/*.jsonl` (transcripts, for the reports and the analysis); `~/.claude/settings.json`, `~/.claude/plugins/installed_plugins.json` and each plugin's folder (for the plan); for the audit, CLAUDE.md files up to the project root, skill and agent files, `~/.claude.json` and `.mcp.json` files; for `/tokens memory`, the project's memory folder; for `/tokens git`, the output of `git status` and `git diff HEAD` (run with repository hooks, fsmonitor, external diff, text conversion and submodules turned off, and not run at all when the repository's own config sets git filter commands). The audit prints only server names, the host of a URL or the command name, never env values, arguments or tokens.
+**Files read (read only):** `~/.claude/projects/**/*.jsonl` (transcripts, for the reports and the analysis); `~/.claude/settings.json`, `~/.claude/plugins/installed_plugins.json` and each plugin's folder (for the plan); for the audit, CLAUDE.md files up to the project root, skill and agent files, `~/.claude.json` and `.mcp.json` files; for `/tokens memory`, the project's memory folder; for `/tokens git`, the output of `git status` and `git diff HEAD` (run with repository hooks, fsmonitor, external diff, text conversion and submodules turned off, and not run at all when the repository's own config sets git filter commands, or when git cannot check that, as git older than 2.26 cannot). The audit prints only server names, the host of a URL or the command name, never env values, arguments or tokens.
 
 ## Code that runs
 
