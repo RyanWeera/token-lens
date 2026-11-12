@@ -55,7 +55,7 @@ Automatic actions, each labelled where it happens:
 - a repeat Read of the same lines within 30 minutes returns an outline when the file is unchanged, or only the changed lines
 - checkpoints: before a compaction, before a subagent, after a failed turn, at session end, and every 20 minutes of work
 - before a compaction: tells the summarizer what to keep (unless you gave instructions); after it: adds the checkpoint back
-- after each answer: writes this session's grade to ~/.claude/token-lens/ (crab-progress and project-link read it)
+- after each answer and each compaction: writes this session's grade to ~/.claude/token-lens/ (crab-progress and project-link read it)
 - once a day at session start: reads your transcripts; once a week it may turn off enabled plugins you have not used in 30 days (skills, commands, agents or MCP only; never plugins with hooks) in settings.json, after a backup. /tokens undo reverses it.`
 
 type Auto = { off?: boolean; lastRun?: number; lastApply?: number }
@@ -351,11 +351,11 @@ export const register: Register = on => {
         await $.session.append({ message: { type: 'user', content: [{ type: 'text', text: `[token-lens, added automatically after compaction; /tokens auto off stops this]\n${formatCheckpoint({ ...cp, reads: [], errors: [] })}` }] } })
         $.ui.log('token-lens: checkpoint added back to the conversation after compaction.')
       }
-      // The crab band reads the quality file right after a compaction, so it gets the new checkpoint time now.
-      if (!e.agentId) await afterTurn($, 'compaction')
     } catch (err) {
       $.ui.log(`token-lens: after the compaction: ${String(err).slice(0, 160)}`)
     }
+    // The crab band reads the quality file right after a compaction, so it gets the new checkpoint time now.
+    if (!e.agentId) await afterTurn($, 'compaction').catch(err => $.ui.log(`token-lens: could not write the quality file: ${String(err).slice(0, 160)}`))
     return r
   }).catch(($, e, next) => next(e)) // a failing hook never blocks a compaction
 

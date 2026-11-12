@@ -1,6 +1,6 @@
 // Run: node --test tests
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -174,10 +174,34 @@ test('git runs no repository hook, and does not run when the repository sets fil
   git('config', 'filter.x.clean', 'cat')
   assert.match(gitContext(d), /^Not run/)
   git('config', '--unset', 'filter.x.clean')
+  git('config', 'core.worktree', tmpdir())
+  assert.match(gitContext(d), /^Not run/)
+  git('config', '--unset', 'core.worktree')
   // A filter check that fails for any reason but "none set" (here: no git found) runs nothing.
   const path = process.env.PATH
   process.env.PATH = ''
   try { assert.match(gitContext(d), /^Not run: git could not check/) } finally { process.env.PATH = path }
+})
+
+test('a partial clone with a missing blob runs no remote command from the repository config', () => {
+  const d = mkdtempSync(join(tmpdir(), 'tl-lazy-'))
+  const git = (...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgSign=false', ...a], { cwd: d, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim()
+  git('init', '-q')
+  writeFileSync(join(d, 'a.txt'), 'one')
+  git('add', 'a.txt')
+  git('commit', '-qm', 'one')
+  const blob = git('rev-parse', 'HEAD:a.txt')
+  rmSync(join(d, '.git', 'objects', blob.slice(0, 2), blob.slice(2)), { force: true })
+  writeFileSync(join(d, 'a.txt'), 'two')
+  const marker = join(d, 'fetched').replace(/\\/g, '/')
+  git('config', 'extensions.partialClone', 'origin')
+  git('config', 'remote.origin.promisor', 'true')
+  git('config', 'remote.origin.url', d)
+  git('config', 'remote.origin.uploadpack', `touch '${marker}';`)
+  assert.match(gitContext(d), /^1 changed file/)
+  assert.equal(existsSync(marker), false)
+  try { git('diff', 'HEAD') } catch { /* the fetch fails after the command ran */ }
+  assert.equal(existsSync(marker), true) // plain git does run it, so the check above means something
 })
 
 test('findings rank binary reads first and report retry churn and cascades', () => {

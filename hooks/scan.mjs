@@ -15,6 +15,8 @@ import { fileURLToPath } from 'node:url'
 if (process.platform === 'win32') process.env.NoDefaultCurrentDirectoryInExePath = '1'
 
 // Names come from files a repository controls: no control or escape characters reach the terminal.
+// A name taken from a repository or config file is printed at most 80 characters long.
+const cap = s => (s = String(s)).length > 80 ? `${s.slice(0, 77)}...` : s
 const strip = t => t.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f\xad\u061c\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]/g, '')
 // A regular file under 1 MB, read as text; null for anything else (a symlink, a directory, a device, a big file).
 // True when no part of p below root is a symlink or junction (so a read never follows a link a repository planted).
@@ -214,7 +216,7 @@ export function audit(cwd, dir = claudeDir()) {
   const md = claudeMdChain(cwd, dir)
   const mcp = mcpServers(cwd, dir, plugins)
   const sum = xs => xs.reduce((s, x) => s + x.chars, 0)
-  const longest = xs => [...xs].sort((a, b) => b.chars - a.chars).slice(0, 5).map(x => `  ${x.name} (${x.chars} chars)`).join('\n')
+  const longest = xs => [...xs].sort((a, b) => b.chars - a.chars).slice(0, 5).map(x => `  ${cap(x.name)} (${x.chars} chars)`).join('\n')
   const tips = []
   const mdTotal = sum(md)
   if (mdTotal > 12_000) tips.push(`CLAUDE.md files total about ${tok(mdTotal)} tokens and load every session. Move rarely used detail into files read on demand.`)
@@ -228,7 +230,7 @@ export function audit(cwd, dir = claudeDir()) {
   for (const [, g] of groups) if (g.length > 1) tips.push(`MCP server loaded more than once: ${g.map(m => `${m.name} (${m.src})`).join(' and ')}. Keep one.`)
   const bySig = new Map()
   for (const m of mcp) bySig.set(m.key, [...(bySig.get(m.key) || []), m])
-  for (const [key, g] of bySig) if (g.length > 1 && key.trim() && new Set(g.map(m => norm(m.name))).size > 1) tips.push(`MCP servers share the same target (${g[0].sig}): ${g.map(m => m.name).join(', ')}.`)
+  for (const [key, g] of bySig) if (g.length > 1 && key.trim() && new Set(g.map(m => norm(m.name))).size > 1) tips.push(`MCP servers share the same target (${cap(g[0].sig)}): ${g.map(m => cap(m.name)).join(', ')}.`)
   if (!tips.length) tips.push('Nothing stands out.')
   return [
     'Setup audit (read only; nothing was changed)',
@@ -236,7 +238,7 @@ export function audit(cwd, dir = claudeDir()) {
     `CLAUDE.md: ${md.length} file(s), about ${tok(mdTotal)} tokens`, ...md.map(m => `  ${m.file} (${m.chars} chars)`),
     `Skills: ${skills.length}, descriptions about ${tok(sum(skills))} tokens. Longest:`, longest(skills),
     `Agents: ${agents.length}, descriptions about ${tok(sum(agents))} tokens. Longest:`, longest(agents),
-    `MCP servers on disk: ${mcp.length}`, ...mcp.map(m => `  ${m.name} [${m.src}] ${m.sig}`),
+    `MCP servers on disk: ${mcp.length}`, ...mcp.map(m => `  ${cap(m.name)} [${m.src}] ${cap(m.sig)}`),
     '  Tool counts need a live connection. Run /context to see them. Account-level connectors (for example Notion from claude.ai) are not on disk and are not listed.',
     '',
     'Suggestions (each is a change for you to approve and make):',
@@ -627,11 +629,11 @@ export function memory(cwd, dir = claudeDir()) {
     if (lines.length > 150) tips.push(`${lines.length} lines. Only the start may load; move old entries out.`)
     const links = [...text.matchAll(/\]\(([^)\s]+\.md)\)/g)].map(x => x[1])
     const missing = links.filter(l => !existsSync(join(m, l)))
-    if (missing.length) tips.push(`Links to missing files: ${missing.slice(0, 6).join(', ')}.`)
+    if (missing.length) tips.push(`Links to missing files: ${missing.slice(0, 6).map(cap).join(', ')}.`)
     let files = []
     try { files = readdirSync(m).filter(f => f.endsWith('.md') && f !== 'MEMORY.md') } catch { /* none */ }
     const orphans = files.filter(f => !links.includes(f))
-    if (orphans.length) tips.push(`Memory files not linked from the index (never recalled): ${orphans.slice(0, 6).join(', ')}.`)
+    if (orphans.length) tips.push(`Memory files not linked from the index (never recalled): ${orphans.slice(0, 6).map(cap).join(', ')}.`)
     const seen = new Set(), dups = new Set()
     for (const l of lines.map(x => x.trim()).filter(Boolean)) (seen.has(l) ? dups : seen).add(l)
     if (dups.size) tips.push(`${dups.size} duplicate line(s).`)
@@ -644,17 +646,18 @@ export function memory(cwd, dir = claudeDir()) {
 // An absolute folder that is never created: as core.hooksPath it means no repository hook runs.
 const NO_HOOKS = join(dirname(fileURLToPath(import.meta.url)), 'no-hooks')
 
-// What the uncommitted changes would cost to read. Plain git commands with repository hooks, fsmonitor,
-// external diff, text conversion and submodules turned off.
+// What the uncommitted changes would cost to read. Plain git commands with lazy fetch (a partial clone's
+// configured remote command), repository hooks, fsmonitor, external diff, text conversion and submodules turned off.
 export function gitContext(cwd) {
-  const git = args => execFileSync('git', ['--no-optional-locks', '-c', `core.hooksPath=${NO_HOOKS}`, '-c', 'core.fsmonitor=false', '-c', 'core.untrackedCache=false', ...args], { cwd, encoding: 'utf8', timeout: 20_000, maxBuffer: 20e6, stdio: ['ignore', 'pipe', 'ignore'] })
-  // A filter set in the repository's own config (local or worktree) runs a command on `git status`, so none of it runs then.
-  let filters = ''
-  try { filters = git(['config', '--show-scope', '--includes', '--get-regexp', '^filter\\.']) } catch (err) {
-    // Exit 1 means none is set. Any other failure (git older than 2.26 has no --show-scope) proves nothing.
-    if (err.status !== 1) return 'Not run: git could not check this repository for filter commands (git missing, or older than 2.26).'
+  const git = args => execFileSync('git', ['--no-lazy-fetch', '--no-optional-locks', '-c', `core.hooksPath=${NO_HOOKS}`, '-c', 'core.fsmonitor=false', '-c', 'core.untrackedCache=false', ...args], { cwd, encoding: 'utf8', timeout: 20_000, maxBuffer: 20e6, stdio: ['ignore', 'pipe', 'ignore'] })
+  // A filter in the repository's own config (local or worktree) runs a command on `git status`, and core.worktree
+  // points git at another folder, so none of it runs then.
+  let risky = ''
+  try { risky = git(['config', '--show-scope', '--includes', '--get-regexp', '^(filter\\.|core\\.worktree$)']) } catch (err) {
+    // Exit 1 means none is set. Any other failure (git older than 2.45 has no --no-lazy-fetch) proves nothing.
+    if (err.status !== 1) return 'Not run: git could not check this repository config (git missing, or older than 2.45).'
   }
-  if (filters.split('\n').some(l => /^(local|worktree)\s/.test(l))) return 'Not run: this repository sets its own git filter commands, which git status would run.'
+  if (risky.split('\n').some(l => /^(local|worktree)\s/.test(l))) return 'Not run: this repository config sets git filter commands or core.worktree.'
   let status
   try { status = git(['status', '--porcelain=v1', '-uall', '--ignore-submodules=all']) } catch { return 'Not a git repository (or git is not installed).' }
   const rows = status.split('\n').filter(Boolean).map(l => ({ code: l.slice(0, 2), file: l.slice(3).replace(/^.* -> /, '').replace(/^"|"$/g, '') }))
@@ -664,7 +667,7 @@ export function gitContext(cwd) {
   const sized = rows.map(r => { let s = 0; try { const st = lstatSync(join(cwd, r.file)); s = st.isFile() ? st.size : 0 } catch { /* deleted */ } return { ...r, s } }).sort((a, b) => b.s - a.s)
   const whole = sized.reduce((a, r) => a + r.s, 0)
   return [`${rows.length} changed file(s). Reading them whole: about ${n(tok(whole))} tokens. The diff alone: about ${n(tok(diff))} tokens.`, '',
-    ...sized.slice(0, 15).map(r => `  ${r.code} ${n(tok(r.s)).padStart(7)}  ${r.file}`),
+    ...sized.slice(0, 15).map(r => `  ${r.code} ${n(tok(r.s)).padStart(7)}  ${cap(r.file)}`),
     ...(rows.length > 15 ? [`  ... and ${rows.length - 15} more`] : []), '',
     whole > 2 * diff && diff ? 'Tip: ask Claude to read `git diff` rather than the whole files when reviewing these changes.' : 'Tip: the files are small; reading them whole is fine.'].map(strip).join('\n')
 }
