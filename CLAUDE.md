@@ -23,4 +23,5 @@ Local Claude Code mod: token and cost reports, session grade, tool output compre
 - Pure helpers (`checkpoint.ts`, `quality.ts`, `compress.ts`, `nudges.ts`) hold no `$`; a function taking `$` must stay in `register.ts`.
 - In tests, the engine writes `$.fs.write` paths in Windows form (`C:\c\...`): find a written file by regex. A test hook on one event may be registered only once per test.
 - Python heredocs and the Write tool can turn a backslash-n or a double backslash inside JS strings into a real newline or a single backslash. Check escapes after such an edit, or use `String.fromCharCode(10)`.
+- git-lfs installs its hooks into `core.hooksPath` during `git diff`, so the `/tokens git` hooks path is a child of `scan.mjs` (it can never be a folder). A plain folder path gets created and filled.
 - skillspector flags the fake `.mcp.json` fixture in `tests/scan.test.mjs` (AS2); the audit really does read MCP config, read only.

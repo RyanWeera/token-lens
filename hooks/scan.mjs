@@ -645,8 +645,9 @@ export function memory(cwd, dir = claudeDir()) {
   }).map(strip).join('\n\n')
 }
 
-// An absolute folder that is never created: as core.hooksPath it means no repository hook runs.
-const NO_HOOKS = join(dirname(fileURLToPath(import.meta.url)), 'no-hooks')
+// A path under this file, so it can never be a folder: as core.hooksPath no repository hook runs, and nothing
+// can be put there (git-lfs installs its hooks into core.hooksPath during `git diff`).
+const NO_HOOKS = join(fileURLToPath(import.meta.url), 'no-hooks')
 
 // What the uncommitted changes would cost to read. Plain git commands with lazy fetch (a partial clone's
 // configured remote command), repository hooks, fsmonitor, external diff, text conversion and submodules turned off.
@@ -672,8 +673,8 @@ export function gitContext(cwd) {
     // Raw bytes, so a file that is not UTF-8 counts what git prints.
     const out = git(['diff', 'HEAD', '--no-ext-diff', '--no-textconv', '--no-color', '--ignore-submodules=all'], 'buffer')
     diff = out.length
-    // git prints one line for a binary change, so the diff does not show it.
-    binary = /^Binary files .* differ$/m.test(out.toString('latin1'))
+    // git prints one line for a binary change and only the pointer of a Git LFS file, so the diff does not show either.
+    binary = /^(Binary files .* differ|[ +-]version https:\/\/git-lfs\.github\.com\/spec\/v1)$/m.test(out.toString('latin1'))
   } catch { /* no HEAD yet, or a blob a partial clone does not have */ }
   // A path that leaves the root or passes a link (a crafted index, a junction) counts as 0.
   const sized = rows.map(r => { let s = 0; const f = join(root, r.file); try { const st = plain(root, f) && lstatSync(f); s = st && st.isFile() ? st.size : 0 } catch { /* deleted */ } return { ...r, s } }).sort((a, b) => b.s - a.s)
@@ -681,11 +682,11 @@ export function gitContext(cwd) {
   // `git diff HEAD` leaves out new files git does not track yet; reading one costs its whole size.
   const untracked = sized.filter(r => r.code === '??')
   if (diff !== null) diff += untracked.reduce((a, r) => a + r.s, 0)
-  // A tip only in the clear cases; the two figures speak for themselves otherwise. A diff larger than the files
-  // holds removed lines (a deleted file reads as 0), which the whole files do not show.
+  // A tip only in the clear cases; the two figures speak for themselves otherwise. The last tip claims only that both
+  // cost little, so a deletion the whole files miss does not make it wrong. Bytes / 4 is not what a binary file costs.
   const tip = diff === null ? 'Tip: git diff failed, so its size is unknown.'
     : whole > 2 * diff && diff && !binary ? `Tip: ask Claude to read \`git diff\`${untracked.length ? ' plus the new files' : ''} rather than the whole files when reviewing these changes.`
-    : tok(whole) < 2000 && diff <= whole ? 'Tip: the changed files are small, so reading them whole costs little.'
+    : tok(whole + diff) < 1000 && !binary ? 'Tip: these changes are small, so reading the files or the diff costs little.'
     : ''
   return [`${rows.length} changed file(s). Reading them whole: about ${n(tok(whole))} tokens. The diff, with new files in full: ${diff === null ? 'unknown' : `about ${n(tok(diff))} tokens`}.`, '',
     ...sized.slice(0, 15).map(r => `  ${r.code} ${n(tok(r.s)).padStart(7)}  ${cap(r.file)}`),
