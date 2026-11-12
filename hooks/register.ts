@@ -84,7 +84,7 @@ async function patchSess($: EngineInterface, sid: string, fn: (s: Sess) => Sess)
 // folder, so a program lookup never starts in the project the session opened.
 async function scan($: EngineInterface, args: string[]): Promise<string> {
   const r = await $.process.run(['node', `${$.plugin.root}/hooks/scan.mjs`, ...args], { timeoutMs: 120_000, cwd: $.plugin.root })
-  return r.exitCode === 0 ? r.stdout : `token-lens: scan failed (exit ${r.exitCode}): ${r.stderr.slice(0, 500).replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f\xad\u061c\u180e\u200b-\u200f\u2028-\u202e\u2060-\u2064\u2066-\u2069\u3164\ufe00-\ufe0f\ufeff\u{e0000}-\u{e007f}]/gu, '')}`
+  return r.exitCode === 0 ? r.stdout : `token-lens: scan failed (exit ${r.exitCode}): ${r.stderr.slice(0, 500).replace(/(?![\t\n])[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]/gu, '')}`
 }
 
 async function getPlan($: EngineInterface): Promise<Plan | string> {

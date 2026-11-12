@@ -14,16 +14,16 @@ import { fileURLToPath } from 'node:url'
 // repository ships could run in place of the real git.
 if (process.platform === 'win32') process.env.NoDefaultCurrentDirectoryInExePath = '1'
 
-// Names come from files a repository controls: no control, escape or invisible characters (tag characters
-// can hide text) reach the terminal or the model.
+// Names come from files a repository controls: no control, escape, format or other invisible character (tag
+// characters and variation selectors can hide text) reaches the terminal or the model. Tab and newline stay.
 // A name taken from a repository or config file is printed at most 80 characters long.
 const cap = s => (s = String(s)).length > 80 ? `${s.slice(0, 77)}...` : s
-const strip = t => t.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f\xad\u061c\u180e\u200b-\u200f\u2028-\u202e\u2060-\u2064\u2066-\u2069\u3164\ufe00-\ufe0f\ufeff\u{e0000}-\u{e007f}]/gu, '')
+const strip = t => t.replace(/(?![\t\n])[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]/gu, '')
 // A regular file under 1 MB, read as text; null for anything else (a symlink, a directory, a device, a big file).
 // True when no part of p below root is a symlink or junction (so a read never follows a link a repository planted).
 const plain = (root, p) => {
   const rel = relative(root, p)
-  if (rel.startsWith('..') || isAbsolute(rel)) return false
+  if (rel === '..' || rel.startsWith('..' + sep) || isAbsolute(rel)) return false
   let cur = root
   for (const seg of rel.split(sep)) {
     cur = join(cur, seg)
@@ -676,8 +676,9 @@ export function gitContext(cwd) {
   const tip = diff === null ? 'Tip: git diff failed, so its size is unknown.'
     : whole > 2 * diff && diff ? 'Tip: ask Claude to read `git diff` rather than the whole files when reviewing these changes.'
     : tok(whole) < 2000 ? 'Tip: the files are small; reading them whole is fine.'
+    : diff >= whole ? 'Tip: the diff is as big as the files or bigger, so read the files whole.'
     : 'Tip: the diff is not much smaller than the files, so reading the diff saves little.'
-  return [`${rows.length} changed file(s). Reading them whole: about ${n(tok(whole))} tokens. The diff alone: ${diff === null ? 'unknown' : `about ${n(tok(diff))} tokens`}.`, '',
+  return [`${rows.length} changed file(s). Reading them whole: about ${n(tok(whole))} tokens. The diff, with new files in full: ${diff === null ? 'unknown' : `about ${n(tok(diff))} tokens`}.`, '',
     ...sized.slice(0, 15).map(r => `  ${r.code} ${n(tok(r.s)).padStart(7)}  ${cap(r.file)}`),
     ...(rows.length > 15 ? [`  ... and ${rows.length - 15} more`] : []), '',
     tip].map(strip).join('\n')

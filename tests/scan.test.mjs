@@ -122,10 +122,11 @@ test('the audit survives a CLAUDE.md that is a directory, skips symlinks and net
   mkdirSync(join(cwd, 'CLAUDE.md'))
   mkdirSync(join(cwd, '.claude', 'skills', 'bad\u202ename'), { recursive: true })
   writeFileSync(join(cwd, '.claude', 'skills', 'bad\u202ename', 'SKILL.md'), '---\nname: x\ndescription: d\n---\n')
-  writeFileSync(join(cwd, '.mcp.json'), JSON.stringify({ mcpServers: { ['evil\u001b[2Jname\u{e0041}\ufe0f']: { url: 'https://h.example/x' } } }))
+  writeFileSync(join(cwd, '.mcp.json'), JSON.stringify({ mcpServers: { ['evil\u001b[2Jname\u{e0041}\ufe0f\u{e0150}\u206a']: { url: 'https://h.example/x' } } }))
   const out = audit(cwd, dir)
   assert.match(out, /Setup audit/)
-  assert.doesNotMatch(out, /[\u001b\u202e\ufe0f\u{e0041}]/u)
+  assert.match(out, /evil\[2Jname \[\.mcp\.json\]/)
+  assert.doesNotMatch(out, /[\u001b\u202e\u206a\ufe0f\u{e0041}\u{e0150}]/u)
 })
 
 test('a plugin id with control characters is ignored', () => {
@@ -164,7 +165,7 @@ test('git runs no repository hook, and does not run when the repository sets fil
   // A new file time with the same content makes a plain `git status` rewrite the index, which runs the hook.
   utimesSync(join(d, 'a.txt'), new Date('2030-01-01'), new Date('2030-01-01'))
   // b.txt is untracked, so `git diff HEAD` leaves it out; its whole size still counts toward the diff.
-  assert.match(gitContext(d), /^1 changed file\(s\)\. Reading them whole: about 100 tokens\. The diff alone: about 100 tokens\./)
+  assert.match(gitContext(d), /^1 changed file\(s\)\. Reading them whole: about 100 tokens\. The diff, with new files in full: about 100 tokens\./)
   assert.equal(existsSync(join(d, '.git', 'hooked')), false)
   // From a subfolder the sizes still come from the repository root.
   mkdirSync(join(d, 'sub'))
@@ -195,10 +196,13 @@ test('a big untracked file with a non-ASCII name keeps its size and gets the rig
   git('add', 'a.txt')
   git('commit', '-qm', 'one')
   writeFileSync(join(d, 'café.txt'), 'x'.repeat(40_000))
+  // A name that starts with two dots is still inside the repository.
+  writeFileSync(join(d, '..notes.txt'), 'y'.repeat(4_000))
   const out = gitContext(d)
-  assert.match(out, /^1 changed file\(s\)\. Reading them whole: about 10\.0k tokens\. The diff alone: about 10\.0k tokens\./)
+  assert.match(out, /^2 changed file\(s\)\. Reading them whole: about 11\.0k tokens\. The diff, with new files in full: about 11\.0k tokens\./)
   assert.match(out, /10\.0k {2}café\.txt/)
-  assert.match(out, /reading the diff saves little/)
+  assert.match(out, /1\.0k {2}\.\.notes\.txt/)
+  assert.match(out, /as big as the files or bigger, so read the files whole/)
 })
 
 test('a partial clone with a missing blob runs no remote command from the repository config', () => {
@@ -216,7 +220,7 @@ test('a partial clone with a missing blob runs no remote command from the reposi
   git('config', 'remote.origin.promisor', 'true')
   git('config', 'remote.origin.url', d)
   git('config', 'remote.origin.uploadpack', `touch '${marker}';`)
-  assert.match(gitContext(d), /^1 changed file.*The diff alone: unknown/)
+  assert.match(gitContext(d), /^1 changed file.*The diff, with new files in full: unknown/)
   assert.equal(existsSync(marker), false)
   try { git('diff', 'HEAD') } catch { /* the fetch fails after the command ran */ }
   assert.equal(existsSync(marker), true) // plain git does run it, so the check above means something
